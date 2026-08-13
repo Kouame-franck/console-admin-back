@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE `announcement` MODIFY `title` VARCHAR(191) NULL,
+ALTER TABLE `Announcement` MODIFY `title` VARCHAR(191) NULL,
     MODIFY `text` TEXT NULL;
