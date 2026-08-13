@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum EstablishmentStatus {
+  actif
+  en_attente
+  suspendu
+}
+
+enum BillingCycle {
+  mensuel
+  annuel
+}
+
+enum PaymentMethod {
+  mobile_money
+  virement
+  cheque
+  especes
+}
+
+enum PaymentStatus {
+  paye
+  partiel
+  en_retard
+}
+
+model AdminUser {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+}
+
+model Offer {
+  id           Int            @id @default(autoincrement())
+  slug         String         @unique
+  name         String
+  description  String         @db.Text
+  price        Int
+  cycle        BillingCycle   @default(annuel)
+  studentLimit Int?
+  active       Boolean        @default(true)
+  features     Json
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  establishments Establishment[]
+}
+
+model Establishment {
+  id                  Int                 @id @default(autoincrement())
+  code                String              @unique
+  name                String
+  ville               String
+  status              EstablishmentStatus @default(actif)
+  createdAt           DateTime
+  responsableNom      String
+  responsableRole     String
+  responsableTelephone String
+  responsableEmail    String
+  offerId             Int?
+  offer               Offer?              @relation(fields: [offerId], references: [id])
+  validityStart        DateTime
+  validityEnd          DateTime
+  studentCount        Int                 @default(0)
+  teacherCount        Int                 @default(0)
+  cursusCount         Int                 @default(0)
+  activeModules       Json
+  sschoolId           Int?                @unique
+  syncedAt            DateTime?
+  payments            Payment[]
+  announcements       Announcement[]
+}
+
+model Announcement {
+  id              Int           @id @default(autoincrement())
+  establishmentId Int
+  establishment   Establishment @relation(fields: [establishmentId], references: [id])
+  slot            Int
+  title           String?
+  badge           String?
+  text            String?       @db.Text
+  imageKey        String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([establishmentId, slot])
+}
+
+model Payment {
+  id              Int           @id @default(autoincrement())
+  code            String        @unique
+  establishmentId Int
+  establishment   Establishment @relation(fields: [establishmentId], references: [id])
+  formule         String
+  montantTotal    Int
+  montantVerse    Int
+  date            DateTime
+  modePaiement    PaymentMethod
+  statut          PaymentStatus
+  createdAt       DateTime      @default(now())
+}
+
+model PricingSettings {
+  id             Int          @id @default(1)
+  devise         String       @default("FCFA")
+  cycleParDefaut BillingCycle @default(annuel)
+}
+
+model PerformanceConfig {
+  id               Int     @id @default(1)
+  cpuThreshold     Int     @default(80)
+  latencyThreshold Int     @default(400)
+  storageThreshold Int     @default(90)
+  cacheTTL         Int     @default(15)
+  maxUploadSize    Int     @default(25)
+  backupFrequency  String  @default("quotidien")
+  backupRetention  Int     @default(30)
+  lazyLoading      Boolean @default(true)
+  compressImages   Boolean @default(true)
+  cdn              Boolean @default(true)
+  queryCache       Boolean @default(false)
+}
