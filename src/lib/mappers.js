@@ -6,12 +6,14 @@ export const PAYMENT_METHOD_TO_DB = {
   "Virement bancaire": "virement",
   "Chèque": "cheque",
   "Espèces": "especes",
+  "Carte bancaire": "carte",
 };
 export const PAYMENT_METHOD_TO_API = {
   mobile_money: "Mobile Money",
   virement: "Virement bancaire",
   cheque: "Chèque",
   especes: "Espèces",
+  carte: "Carte bancaire",
 };
 
 export const PAYMENT_STATUS_TO_DB = { "payé": "paye", partiel: "partiel", "en retard": "en_retard" };

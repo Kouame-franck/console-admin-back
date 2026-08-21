@@ -2,10 +2,12 @@ import { Router } from "express";
 import multer from "multer";
 import { prisma } from "../lib/prisma.js";
 import { serializeEstablishment, serializeAnnouncement } from "../lib/serializers.js";
-import { STATUS_TO_DB } from "../lib/mappers.js";
+import { STATUS_TO_DB, PAYMENT_METHOD_TO_DB } from "../lib/mappers.js";
 import { nextCode } from "../lib/codes.js";
-import { fetchRealEtablissements } from "../lib/sschoolSync.js";
+import { fetchRealEtablissements, createRealEtablissement, deleteRealEtablissement } from "../lib/sschoolSync.js";
 import { uploadFile, deleteFile, generateFileName } from "../lib/r2.js";
+import { calculerPeriode } from "../lib/abonnement.js";
+import { MODULES } from "../lib/catalogue.js";
 
 const router = Router();
 const includeOffer = { offer: true };
@@ -74,15 +76,73 @@ router.get("/:code", async (req, res) => {
 
 router.post("/", async (req, res) => {
   const b = req.body || {};
-  if (!b.name || !b.ville || !b.responsable) {
-    return res.status(400).json({ error: "name, ville et responsable sont requis." });
+  if (!b.name || !b.ville || !b.responsable?.nom || !b.responsable?.email) {
+    return res.status(400).json({ error: "name, ville et responsable (nom, email) sont requis." });
+  }
+
+  // L'établissement Sschool est la source de vérité : on le provisionne d'abord (établissement
+  // + rôle Super_admin + compte, l'année scolaire restant à ouvrir par le client lui-même) pour
+  // ne jamais créer de fiche console orpheline qui prétendrait représenter une école qui n'existe
+  // pas réellement.
+  let sschoolResult;
+  try {
+    sschoolResult = await createRealEtablissement({
+      nom: b.name,
+      address: b.ville,
+      email: b.responsable.email,
+      tel: b.responsable.telephone,
+      responsable: {
+        nom: b.responsable.nom,
+        prenoms: b.responsable.prenoms,
+        email: b.responsable.email,
+        contact: b.responsable.telephone,
+      },
+      // Réservé au compte de démonstration (b.demo) : identifiants mémorisables plutôt que
+      // l'email du responsable et un mot de passe généré. Absents pour un établissement normal.
+      login: b.demo ? b.login : undefined,
+      password: b.demo ? b.password : undefined,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `Création dans Sschool impossible : ${err.message}` });
   }
 
   const code = await nextCode(prisma, "establishment", "SSC");
+
+  // Une validité par défaut à "maintenant" rendrait l'établissement immédiatement "expiré"
+  // aux yeux de sschool (voir getStatutAbonnement côté sschool, qui croise statut + date) —
+  // donc pas réellement utilisable malgré le compte créé. Avec une offre choisie, on active
+  // sa première période comme le fait /renouveler (même calcul, même trace de paiement) ;
+  // sans offre, un essai de 14 jours en attendant qu'un abonnement soit choisi.
   let offerId = null;
-  if (b.offerId) {
-    const offer = await prisma.offer.findUnique({ where: { slug: b.offerId } });
-    offerId = offer?.id ?? null;
+  let activeModules = [];
+  let validityStart = new Date();
+  let validityEnd = new Date();
+  let offer = null;
+  let montant = 0;
+  const quantite = b.quantite ?? 1;
+
+  if (b.demo) {
+    // Compte de démonstration : jamais rattaché à une formule (rien à facturer, rien à
+    // renouveler), et une validité portée loin dans le futur plutôt qu'un essai de 14 jours —
+    // c'est cette date, et elle seule, que sschool regarde pour décider si le compte est actif
+    // (voir getStatutAbonnement côté sschool), donc "n'expire jamais" en pratique. Sans offre,
+    // les limites (élèves, enseignants...) sont déjà illimitées par convention (voir
+    // serializePlanInfo — null = "Illimité") ; seuls les modules ont besoin d'être activés à
+    // la main, puisqu'ils viennent normalement de `offer.modules`, absent ici.
+    validityEnd = new Date("2099-12-31");
+    activeModules = MODULES.map((m) => m.id);
+  } else if (b.offerId) {
+    offer = await prisma.offer.findUnique({ where: { slug: b.offerId } });
+    if (offer) {
+      offerId = offer.id;
+      activeModules = offer.modules ?? [];
+      const periode = calculerPeriode(offer, quantite);
+      validityStart = periode.start;
+      validityEnd = periode.end;
+      montant = periode.montant;
+    }
+  } else {
+    validityEnd.setDate(validityEnd.getDate() + 14);
   }
 
   const created = await prisma.establishment.create({
@@ -97,17 +157,37 @@ router.post("/", async (req, res) => {
       responsableTelephone: b.responsable.telephone || "",
       responsableEmail: b.responsable.email || "",
       offerId,
-      validityStart: b.validity?.start ? new Date(b.validity.start) : new Date(),
-      validityEnd: b.validity?.end ? new Date(b.validity.end) : new Date(),
+      validityStart,
+      validityEnd,
       studentCount: b.stats?.etudiants ?? 0,
       teacherCount: b.stats?.enseignants ?? 0,
       cursusCount: b.stats?.cursus ?? 0,
-      activeModules: b.activeModules ?? [],
+      activeModules,
+      sschoolId: sschoolResult.id_etablissement,
+      syncedAt: new Date(),
     },
     include: includeOffer,
   });
 
-  res.status(201).json(serializeEstablishment(created));
+  let paiement = null;
+  if (offer && montant > 0) {
+    const paymentCode = await nextCode(prisma, "payment", "PAY");
+    const payment = await prisma.payment.create({
+      data: {
+        code: paymentCode,
+        establishmentId: created.id,
+        formule: offer.name,
+        montantTotal: montant,
+        montantVerse: montant,
+        date: validityStart,
+        modePaiement: PAYMENT_METHOD_TO_DB[b.modePaiement] ?? "especes",
+        statut: "paye",
+      },
+    });
+    paiement = { reference: payment.code, montant, modePaiement: b.modePaiement ?? "Espèces" };
+  }
+
+  res.status(201).json({ ...serializeEstablishment(created), sschoolAdmin: sschoolResult.admin, paiement });
 });
 
 router.patch("/:code", async (req, res) => {
@@ -171,10 +251,76 @@ router.delete("/:code", async (req, res) => {
   const existing = await prisma.establishment.findUnique({ where: { code: req.params.code } });
   if (!existing) return res.status(404).json({ error: "Établissement introuvable." });
 
+  // Suppression réelle côté Sschool d'abord (établissement + toutes ses données : élèves,
+  // notes, personnel...) — voir sschoolSync.js. On ne retire la fiche console qu'une fois
+  // celle-ci confirmée, pour ne jamais désynchroniser la console d'une école qui existe
+  // toujours réellement si cet appel échoue.
+  if (existing.sschoolId) {
+    try {
+      await deleteRealEtablissement(existing.sschoolId);
+    } catch (err) {
+      return res.status(502).json({ error: `Suppression dans Sschool impossible : ${err.message}` });
+    }
+  }
+
   await prisma.payment.deleteMany({ where: { establishmentId: existing.id } });
   await prisma.announcement.deleteMany({ where: { establishmentId: existing.id } });
   await prisma.establishment.delete({ where: { code: req.params.code } });
   res.status(204).end();
+});
+
+// Pendant console du select-offer public de sschool, mais pour un paiement physique saisi par
+// un agent (espèces, chèque, virement, mobile money ou carte au comptoir) plutôt qu'un achat en
+// libre-service — mêmes effets (établissement activé/prolongé + versement tracé), même route
+// pour "prolonger" (offerSlug identique à l'offre en cours) ou "changer d'offre" (offerSlug
+// différent), le bouton de l'UI choisit juste le libellé.
+router.post("/:code/renouveler", async (req, res) => {
+  const { offerSlug, quantite, modePaiement } = req.body || {};
+  if (!offerSlug) return res.status(400).json({ error: "offerSlug requis." });
+
+  const establishment = await prisma.establishment.findUnique({ where: { code: req.params.code } });
+  if (!establishment) return res.status(404).json({ error: "Établissement introuvable." });
+
+  const offer = await prisma.offer.findUnique({ where: { slug: offerSlug } });
+  if (!offer || !offer.active) return res.status(400).json({ error: "Offre invalide ou inactive." });
+
+  const { start, end, montant } = calculerPeriode(offer, quantite);
+
+  const updated = await prisma.establishment.update({
+    where: { id: establishment.id },
+    data: {
+      offerId: offer.id,
+      status: "actif",
+      validityStart: start,
+      validityEnd: end,
+      activeModules: offer.modules ?? [],
+    },
+    include: includeOffer,
+  });
+
+  const code = await nextCode(prisma, "payment", "PAY");
+  const paiement = await prisma.payment.create({
+    data: {
+      code,
+      establishmentId: establishment.id,
+      formule: offer.name,
+      montantTotal: montant,
+      montantVerse: montant,
+      date: start,
+      modePaiement: PAYMENT_METHOD_TO_DB[modePaiement] ?? "especes",
+      statut: "paye",
+    },
+  });
+
+  res.json({
+    etablissement: serializeEstablishment(updated),
+    paiement: {
+      reference: paiement.code,
+      montant,
+      modePaiement: modePaiement ?? "Espèces",
+      date: start.toISOString(),
+    },
+  });
 });
 
 router.get("/:code/announcements", async (req, res) => {

@@ -6,6 +6,22 @@ import { PrismaClient } from "../src/generated/prisma/index.js";
 const adapter = new PrismaMariaDb(process.env.DATABASE_URL);
 const prisma = new PrismaClient({ adapter });
 
+// Modules verrouillables (voir Establishment.activeModules côté console, et
+// utils/moduleGuard.js côté sschool) : liste des ids valides, à garder synchronisée avec
+// projet-sschool/back/utils/moduleGuard.js.
+//   importIntelligent, cahierTexteAttachments, espaceParent, activites,
+//   paiementElectronique, gestionFinanciere, salles
+
+// Limites/modules par palier — première passe, ajustable ensuite offre par offre depuis la
+// console (Configuration > Tarifs & offres) sans repasser par ce seed.
+const LIMITES_STARTER = { cursusLimit: 3, teacherLimit: 15, staffLimit: 3, roleLimit: 3 };
+const LIMITES_STANDARD = { cursusLimit: 10, teacherLimit: 50, staffLimit: 8, roleLimit: 8 };
+const LIMITES_PREMIUM = { cursusLimit: null, teacherLimit: null, staffLimit: null, roleLimit: null };
+
+const MODULES_STARTER = [];
+const MODULES_STANDARD = ["cahierTexteAttachments", "activites", "salles", "gestionFinanciere"];
+const MODULES_PREMIUM = [...MODULES_STANDARD, "espaceParent", "paiementElectronique", "importIntelligent"];
+
 // Offres par défaut, créées uniquement si elles n'existent pas encore.
 // Une fois créées, elles sont éditables via la console (Configuration > Tarifs & offres)
 // et ce seed ne les écrasera plus jamais — voir `update: {}` ci-dessous.
@@ -17,6 +33,8 @@ const offers = [
     price: 650000,
     cycle: "annuel",
     studentLimit: 300,
+    ...LIMITES_STARTER,
+    modules: MODULES_STARTER,
     active: true,
     features: ["Gestion des élèves", "Bulletins standards", "Support par email"],
   },
@@ -27,6 +45,8 @@ const offers = [
     price: 1200000,
     cycle: "annuel",
     studentLimit: 800,
+    ...LIMITES_STANDARD,
+    modules: MODULES_STANDARD,
     active: true,
     features: ["Tout Starter", "Gestion des enseignants", "Export des bulletins", "Support prioritaire"],
   },
@@ -37,6 +57,49 @@ const offers = [
     price: 2500000,
     cycle: "annuel",
     studentLimit: null,
+    ...LIMITES_PREMIUM,
+    modules: MODULES_PREMIUM,
+    active: true,
+    features: ["Tout Standard", "Multi-établissements", "API & intégrations", "Support dédié 24/7"],
+  },
+  // Pendants mensuels : même nom/description/features/limites/modules que la formule
+  // annuelle correspondante (regroupés côté UI par nom), prix = annuel / 8. Logique métier :
+  // l'année scolaire dure 9 mois (rentrée à fin d'année), et l'abonnement annuel équivaut à
+  // payer 8 des 9 mois — soit "1 mois offert" par rapport à un paiement mensuel sur toute
+  // l'année scolaire.
+  {
+    slug: "starter-mensuel",
+    name: "Starter",
+    description: "Pour les petits établissements qui démarrent avec Sschool.",
+    price: 81250,
+    cycle: "mensuel",
+    studentLimit: 300,
+    ...LIMITES_STARTER,
+    modules: MODULES_STARTER,
+    active: true,
+    features: ["Gestion des élèves", "Bulletins standards", "Support par email"],
+  },
+  {
+    slug: "standard-mensuel",
+    name: "Standard",
+    description: "Le plus choisi par les établissements de taille moyenne.",
+    price: 150000,
+    cycle: "mensuel",
+    studentLimit: 800,
+    ...LIMITES_STANDARD,
+    modules: MODULES_STANDARD,
+    active: true,
+    features: ["Tout Starter", "Gestion des enseignants", "Export des bulletins", "Support prioritaire"],
+  },
+  {
+    slug: "premium-mensuel",
+    name: "Premium",
+    description: "Pour les groupes scolaires et les réseaux multi-sites.",
+    price: 312500,
+    cycle: "mensuel",
+    studentLimit: null,
+    ...LIMITES_PREMIUM,
+    modules: MODULES_PREMIUM,
     active: true,
     features: ["Tout Standard", "Multi-établissements", "API & intégrations", "Support dédié 24/7"],
   },

@@ -27,7 +27,11 @@ app.use(
     },
   })
 );
-app.use(express.json());
+// `verify` conserve les octets bruts du corps AVANT parsing JSON, sur `req.rawBody` — le
+// webhook KadevPay signe ce corps en HMAC-SHA512 (voir lib/paiement/kadevpay.js), et une
+// vérification sur `JSON.stringify(req.body)` reconstitué échouerait au moindre écart
+// d'espacement ou d'ordre des clés avec ce que KadevPay a réellement signé.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 app.use("/api", routes);
 

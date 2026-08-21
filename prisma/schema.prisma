@@ -23,6 +23,7 @@ enum PaymentMethod {
   virement
   cheque
   especes
+  carte
 }
 
 enum PaymentStatus {
@@ -40,43 +41,54 @@ model AdminUser {
 }
 
 model Offer {
-  id           Int            @id @default(autoincrement())
-  slug         String         @unique
-  name         String
-  description  String         @db.Text
-  price        Int
-  cycle        BillingCycle   @default(annuel)
-  studentLimit Int?
-  active       Boolean        @default(true)
-  features     Json
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  establishments Establishment[]
+  id              Int              @id @default(autoincrement())
+  slug            String           @unique
+  name            String
+  description     String           @db.Text
+  price           Int
+  cycle           BillingCycle     @default(annuel)
+  studentLimit    Int?
+  cursusLimit     Int?
+  teacherLimit    Int?
+  staffLimit      Int?
+  roleLimit       Int?
+  // Modules inclus dans ce palier — liste d'ids (ex: ["salles","activites"]), appliquée à
+  // Establishment.activeModules à chaque activation (select-offer / renouveler), voir
+  // publicPortal.js et etablissements.js. Un Int? à null sur une limite = illimité (même
+  // convention que studentLimit).
+  modules         Json?
+  active          Boolean          @default(true)
+  features        Json
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  establishments  Establishment[]
+  pendingPayments PendingPayment[]
 }
 
 model Establishment {
-  id                  Int                 @id @default(autoincrement())
-  code                String              @unique
-  name                String
-  ville               String
-  status              EstablishmentStatus @default(actif)
-  createdAt           DateTime
-  responsableNom      String
-  responsableRole     String
+  id                   Int                 @id @default(autoincrement())
+  code                 String              @unique
+  name                 String
+  ville                String
+  status               EstablishmentStatus @default(actif)
+  createdAt            DateTime
+  responsableNom       String
+  responsableRole      String
   responsableTelephone String
-  responsableEmail    String
-  offerId             Int?
-  offer               Offer?              @relation(fields: [offerId], references: [id])
+  responsableEmail     String
+  offerId              Int?
+  offer                Offer?              @relation(fields: [offerId], references: [id])
   validityStart        DateTime
   validityEnd          DateTime
-  studentCount        Int                 @default(0)
-  teacherCount        Int                 @default(0)
-  cursusCount         Int                 @default(0)
-  activeModules       Json
-  sschoolId           Int?                @unique
-  syncedAt            DateTime?
-  payments            Payment[]
-  announcements       Announcement[]
+  studentCount         Int                 @default(0)
+  teacherCount         Int                 @default(0)
+  cursusCount          Int                 @default(0)
+  activeModules        Json
+  sschoolId            Int?                @unique
+  syncedAt             DateTime?
+  payments             Payment[]
+  announcements        Announcement[]
+  pendingPayments      PendingPayment[]
 }
 
 model Announcement {
@@ -105,7 +117,70 @@ model Payment {
   date            DateTime
   modePaiement    PaymentMethod
   statut          PaymentStatus
+  transactionId   String?
   createdAt       DateTime      @default(now())
+}
+
+enum SignupStatus {
+  en_attente
+  paye
+  echoue
+}
+
+enum PaymentFlow {
+  signup
+  renouvellement
+  addon
+}
+
+// Toute transaction d'abonnement en cours, quelle que soit son origine — la console est la
+// seule autorité de facturation : elle initie le paiement, tient l'attente, reçoit le retour
+// Money Fusion et provisionne. digyo et s-school ne font que relayer.
+//
+//   type = signup         → nouvelle école depuis digyo : l'établissement n'existe pas encore,
+//                           les champs nom/ville/responsable* portent sa future identité et la
+//                           création (createRealEtablissement) n'a lieu qu'une fois payé.
+//   type = renouvellement → école existante depuis s-school : establishmentId est renseigné,
+//                           l'activation réutilise le même chemin que select-offer.
+//
+// `traite` est la garde anti-double-activation : le retour navigateur (polling) et le webhook
+// peuvent arriver dans n'importe quel ordre, ou tous les deux — un seul gagne la course.
+model PendingPayment {
+  id               Int          @id @default(autoincrement())
+  token            String       @unique
+  type             PaymentFlow
+  // Facultatif : un paiement de type "addon" porte une AddonOffer (addonOfferId ci-dessous),
+  // pas une formule d'abonnement — voir migration 20260818160000_addon_purchase, dont ce
+  // fichier source avait divergé (schema.prisma pas remis à jour au moment de l'écriture à la
+  // main de cette migration ; la base, elle, a toujours eu le bon état).
+  offerId          Int?
+  offer            Offer?       @relation(fields: [offerId], references: [id])
+  quantite         Int          @default(1)
+  montant          Int
+  statut           SignupStatus @default(en_attente)
+  traite           Boolean      @default(false)
+  transactionId    String?
+  createdAt        DateTime     @default(now())
+  // Référence propre à l'agrégateur, connue seulement une fois le paiement effectué côté client
+  // (widget KadevPay) — absente pour un agrégateur qui, comme Money Fusion, renvoie son propre
+  // identifiant dès l'initiation (auquel cas c'est `token` lui-même qui sert de référence).
+  // Voir lib/paiement/kadevpay.js.
+  referenceExterne String?      @unique
+
+  // Renouvellement uniquement
+  establishmentId Int?
+  establishment   Establishment? @relation(fields: [establishmentId], references: [id])
+
+  // Inscription uniquement — identité de la future école
+  nom                  String?
+  ville                String?
+  responsableNom       String?
+  responsableRole      String?
+  responsableTelephone String?
+  responsableEmail     String?
+  establishmentCode    String?
+  addonOffer           AddonOffer? @relation(fields: [addonOfferId], references: [id])
+  addonOfferId         Int?
 }
 
 model PricingSettings {
@@ -127,4 +202,91 @@ model PerformanceConfig {
   compressImages   Boolean @default(true)
   cdn              Boolean @default(true)
   queryCache       Boolean @default(false)
+}
+
+enum AddonType {
+  sms
+}
+
+// Offre isolee : un service supplementaire vendu a part, sans lien avec la formule
+// d'abonnement, qu'un etablissement deja client peut souscrire (voir s-school,
+// Configuration > Mon abonnement, ou elles s'affichent a cote des formules).
+// La premiere est le service SMS, vendu par lots de credits prepayes.
+model AddonOffer {
+  id          Int       @id @default(autoincrement())
+  slug        String    @unique
+  name        String
+  description String?
+  type        AddonType
+  // Prix du lot, en FCFA.
+  price       Int
+  // Ce que le lot livre — pour le SMS, un nombre de credits (un credit = un segment envoye).
+  quantite    Int
+  unite       String    @default("SMS")
+  active      Boolean   @default(true)
+  features    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  pendingPayments PendingPayment[]
+}
+
+// Personne ayant demandé l'accès au compte test s-school (site digyo, page SaaS). Un seul
+// compte s-school partagé existe pour tous les essais (voir DEMO_SSCHOOL_* dans .env) — cette
+// table ne sert qu'à savoir qui a demandé l'accès, pas à provisionner quoi que ce soit.
+model DemoLead {
+  id        Int      @id @default(autoincrement())
+  nom       String
+  email     String
+  telephone String
+  createdAt DateTime @default(now())
+}
+
+enum DigyoTriageStatus {
+  nouveau
+  en_cours
+  traite
+  refuse
+}
+
+// Copie synchronisée en lecture des demandes de projet client de digyo (table `projects` côté
+// digyo-site, voir lib/digyoSync.js) — la console n'écrit jamais dans digyo, elle se contente
+// d'afficher ces demandes dans l'onglet Gestion et d'y superposer un statut de triage qui,
+// lui, reste local (`status` ci-dessous n'est jamais renvoyé vers digyo).
+model DigyoProjectRequest {
+  id            Int               @id @default(autoincrement())
+  digyoId       Int               @unique
+  title         String
+  pillar        String?
+  description   String            @db.Text
+  budgetRange   String?
+  deadline      String?
+  sourceStatus  String?
+  status        DigyoTriageStatus @default(nouveau)
+  clientName    String
+  clientEmail   String
+  createdAt     DateTime
+  syncedAt      DateTime?
+}
+
+// Article de blog digyo — la console est la seule source de vérité (voir routes/blog.js et
+// routes/publicPortal.js) : digyo-site n'en garde aucune copie locale, il relaie
+// /api/public/blog à chaque affichage (voir digyo-site/back/src/routes/blog.js). `body` porte
+// la même structure de blocs que l'ancien tableau codé en dur (front/src/data/blog.js côté
+// digyo-site), repris tel quel par le script de seed pour ne perdre aucun article existant.
+model BlogPost {
+  id        Int      @id @default(autoincrement())
+  slug      String   @unique
+  title     String
+  category  String
+  excerpt   String   @db.Text
+  date      DateTime
+  readTime  String
+  author    String
+  icon      String
+  image     String   @db.Text
+  body      Json
+  published Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
