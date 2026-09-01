@@ -127,6 +127,7 @@ export function serializeBlogPost(b) {
     author: b.author,
     icon: b.icon,
     image: b.image,
+    coverType: b.coverType,
     body: b.body,
     published: b.published,
     updatedAt: b.updatedAt.toISOString(),

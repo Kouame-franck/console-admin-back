@@ -1,9 +1,30 @@
 import { Router } from "express";
+import multer from "multer";
 import { prisma } from "../lib/prisma.js";
 import { serializeBlogPost } from "../lib/serializers.js";
 import { generateBlogDraft, BLOG_CATEGORIES } from "../lib/aiBlog.js";
+import { uploadFile, generateFileName } from "../lib/r2.js";
 
 const router = Router();
+// Couverture d'article : image ou courte vidéo, servie ensuite en <video> côté digyo-site --
+// limite plus large que les 5 Mo des images d'annonce (etablissements.js), qui n'accueillent
+// jamais de vidéo.
+const COVER_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+]);
+const uploadCover = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 80 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    cb(null, COVER_MIME_TYPES.has(file.mimetype));
+  },
+});
 
 function slugify(title) {
   return title
@@ -21,6 +42,19 @@ router.get("/", async (req, res) => {
 
 router.get("/categories", (req, res) => {
   res.json(BLOG_CATEGORIES);
+});
+
+// Upload de la couverture (image ou vidéo) vers R2 -- renvoie l'URL publique et le type détecté
+// du fichier ; l'admin inclut ensuite ces deux valeurs (image, coverType) dans le payload
+// JSON classique de POST / ou PATCH /:slug, qui ne gèrent que du texte.
+router.post("/upload-cover", uploadCover.single("file"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Fichier manquant ou format non supporté (image ou vidéo courante uniquement)." });
+  }
+  const coverType = req.file.mimetype.startsWith("video/") ? "video" : "image";
+  const fileName = generateFileName(req.file.originalname, "blog-covers");
+  const { publicUrl } = await uploadFile(req.file.buffer, fileName, req.file.mimetype);
+  res.json({ url: publicUrl, coverType });
 });
 
 // Assiste la rédaction (voir lib/aiBlog.js) — ne touche pas la base, l'admin valide et
@@ -62,6 +96,7 @@ router.post("/", async (req, res) => {
       author: b.author || "L'équipe digyo",
       icon: b.icon || "spark",
       image: b.image || "",
+      coverType: b.coverType === "video" ? "video" : "image",
       body: b.body ?? [],
       published: b.published ?? true,
     },
@@ -84,6 +119,7 @@ router.patch("/:slug", async (req, res) => {
   if (b.author !== undefined) data.author = b.author;
   if (b.icon !== undefined) data.icon = b.icon;
   if (b.image !== undefined) data.image = b.image;
+  if (b.coverType !== undefined) data.coverType = b.coverType === "video" ? "video" : "image";
   if (b.body !== undefined) data.body = b.body;
   if (b.published !== undefined) data.published = b.published;
 

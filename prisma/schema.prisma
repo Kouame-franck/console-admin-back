@@ -285,6 +285,7 @@ model BlogPost {
   author    String
   icon      String
   image     String   @db.Text
+  coverType String   @default("image")
   body      Json
   published Boolean  @default(true)
   createdAt DateTime @default(now())
