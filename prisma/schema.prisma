@@ -290,4 +290,144 @@ model BlogPost {
   published Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  comments  BlogComment[]
+  likes     BlogLike[]
+}
+
+// Commentaire public sur un article, publié depuis digyo (relais, voir routes/publicPortal.js
+// et digyo-site/back/src/routes/blog.js) — visible immédiatement, sans modération préalable
+// (même logique que l'ancienne version locale au navigateur qu'il remplace) ; la console permet
+// juste de le supprimer après coup si besoin (voir routes/blog.js > DELETE /:slug/comments/:id).
+model BlogComment {
+  id          Int      @id @default(autoincrement())
+  blogPostId  Int
+  blogPost    BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  name        String
+  text        String   @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([blogPostId])
+}
+
+// "J'aime" public sur un article. `visitorId` est un identifiant anonyme généré et conservé côté
+// navigateur (voir digyo-site/front/src/hooks/usePostReactions.js) — auto-déclaratif comme sur la
+// plupart des blogs, pas une preuve d'identité : l'enjeu est un compteur affiché publiquement,
+// pas une donnée sensible, donc pas besoin d'un compte pour aimer un article.
+model BlogLike {
+  id         Int      @id @default(autoincrement())
+  blogPostId Int
+  blogPost   BlogPost @relation(fields: [blogPostId], references: [id], onDelete: Cascade)
+  visitorId  String
+  createdAt  DateTime @default(now())
+
+  @@unique([blogPostId, visitorId])
+}
+
+enum DiagnosticStatus {
+  requested
+  in_progress
+  completed
+  onsite_required
+}
+
+// Demande de diagnostic approfondi digyo (voir digyo-site/back/src/clientProfiles.js >
+// requestDeepDiagnostic). Contrairement au blog/contact, digyo reste maître du diagnostic
+// RAPIDE et de l'identité du profil client -- la console ne synchronise que la demande
+// d'approfondi : en lecture (pull, même principe que DigyoProjectRequest, voir routes/
+// diagnostics.js > POST /sync et lib/digyoSync.js), et en écriture pour `status`/`result` (push
+// vers digyo à chaque changement côté console, voir PATCH /:id) afin que le client voie
+// l'avancement dans son Espace client (DeepDiagnosticStatus.jsx). Une resynchronisation ne
+// touche donc jamais `status`/`result` : le même piège qu'avec le statut de triage des projets
+// (voir DigyoProjectRequest) s'appliquerait, en pire, puisqu'ici le client verrait la régression.
+model DiagnosticRequest {
+  id                  Int              @id @default(autoincrement())
+  digyoUserId         Int              @unique
+  companyName         String
+  clientName          String
+  clientEmail         String
+  sector              String
+  // Contexte du diagnostic rapide au moment de la demande, pour trier sans ressynchroniser
+  // ailleurs -- pas recalculé côté console, c'est juste le score brut déjà stocké côté digyo.
+  quickScore          Int?
+  detailedChallenge   String           @db.Text
+  constraints         String           @db.Text
+  businessGoals       Json
+  differentiation     String           @db.Text
+  clientele           String
+  annualRevenue       String
+  decisionMaker       String
+  lostProspects       String
+  interestAreas       Json
+  investmentBudget    String
+  digitalImportance   Int
+  expectations        String           @db.Text
+  address             String
+  phone               String
+  contactMethod       String
+  availability        Json
+  acceptPhysicalAudit Boolean          @default(false)
+  status              DiagnosticStatus @default(requested)
+  result              String?          @db.Text
+  requestedAt         DateTime
+  syncedAt            DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+}
+
+enum SupportConversationStatus {
+  open
+  resolved
+}
+
+enum SupportMessageFrom {
+  visitor
+  staff
+  auto
+}
+
+// Chat d'assistance du site digyo (widget SupportWidget.jsx) -- remplace le localStorage de
+// useSupportChat.js, qui ne faisait qu'illusion (le message "reçu" n'atteignait jamais
+// personne). Comme le blog, la console est ici la seule source de vérité : digyo relaie tout
+// (voir digyo-site/back/src/routes/support.js), aucune copie locale de son côté. Une conversation
+// par visiteur anonyme (`visitorToken`, généré et conservé côté navigateur -- voir
+// digyo-site/front/src/lib/visitor.js), retrouvée à chaque nouvelle visite, jamais recréée.
+model SupportConversation {
+  id               Int                       @id @default(autoincrement())
+  visitorToken     String                    @unique
+  visitorName      String?
+  visitorEmail     String?
+  status           SupportConversationStatus @default(open)
+  // Repoussés par un GET (voir routes/publicPortal.js et routes/supportConversations.js), pas
+  // par l'envoi lui-même : un visiteur qui poste plusieurs messages sans que le staff ait encore
+  // regardé reste "non lu" une seule fois, pas une fois par message.
+  unreadForStaff   Boolean                   @default(true)
+  unreadForVisitor Boolean                   @default(false)
+  lastMessageAt    DateTime                  @default(now())
+  createdAt        DateTime                  @default(now())
+  messages         SupportMessage[]
+}
+
+model SupportMessage {
+  id             Int                 @id @default(autoincrement())
+  conversationId Int
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  from           SupportMessageFrom
+  text           String              @db.Text
+  createdAt      DateTime            @default(now())
+
+  @@index([conversationId])
+}
+
+// Message du formulaire de contact digyo (voir digyo-site/back/src/server.js > POST /api/contact
+// et routes/publicPortal.js > POST /contact) — la console est la seule interface de gestion :
+// digyo se contente d'envoyer l'email de notification et de garder une copie locale de secours
+// (digyo-site/back/src/data/contacts.json) si jamais la console est injoignable au moment de l'envoi.
+model ContactMessage {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String
+  service   String?
+  message   String   @db.Text
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
 }

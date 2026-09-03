@@ -7,6 +7,11 @@ import { loginLimiter } from "../middleware/rateLimit.js";
 
 const router = Router();
 
+// Hash factice, sans compte réel derrière -- comparé quand l'email n'existe pas, pour que
+// bcrypt.compare() s'exécute dans les deux cas (utilisateur trouvé ou non) et que le temps de
+// réponse ne trahisse pas quels emails ont un compte (audit sécurité, 2026-09-03).
+const DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8Q6c0lJlZQvHwZgxbQ5Xh0K8lqZ1Nu";
+
 router.post("/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
 
@@ -15,12 +20,8 @@ router.post("/login", loginLimiter, async (req, res) => {
   }
 
   const user = await prisma.adminUser.findUnique({ where: { email } });
-  if (!user) {
-    return res.status(401).json({ error: "Identifiants invalides." });
-  }
-
-  const valid = await bcrypt.compare(password, user.passwordHash);
-  if (!valid) {
+  const valid = await bcrypt.compare(password, user?.passwordHash || DUMMY_HASH);
+  if (!user || !valid) {
     return res.status(401).json({ error: "Identifiants invalides." });
   }
 

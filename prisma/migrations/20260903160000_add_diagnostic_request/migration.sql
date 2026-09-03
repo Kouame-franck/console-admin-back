@@ -1,0 +1,37 @@
+-- Demandes de diagnostic approfondi digyo, synchronisées en lecture puis mises à jour (statut +
+-- résultat) en écriture vers digyo -- voir routes/diagnostics.js et lib/digyoSync.js.
+CREATE TABLE `DiagnosticRequest` (
+    `id` INTEGER NOT NULL AUTO_INCREMENT,
+    `digyoUserId` INTEGER NOT NULL,
+    `companyName` VARCHAR(191) NOT NULL,
+    `clientName` VARCHAR(191) NOT NULL,
+    `clientEmail` VARCHAR(191) NOT NULL,
+    `sector` VARCHAR(191) NOT NULL,
+    `quickScore` INTEGER NULL,
+    `detailedChallenge` TEXT NOT NULL,
+    `constraints` TEXT NOT NULL,
+    `businessGoals` JSON NOT NULL,
+    `differentiation` TEXT NOT NULL,
+    `clientele` VARCHAR(191) NOT NULL,
+    `annualRevenue` VARCHAR(191) NOT NULL,
+    `decisionMaker` VARCHAR(191) NOT NULL,
+    `lostProspects` VARCHAR(191) NOT NULL,
+    `interestAreas` JSON NOT NULL,
+    `investmentBudget` VARCHAR(191) NOT NULL,
+    `digitalImportance` INTEGER NOT NULL,
+    `expectations` TEXT NOT NULL,
+    `address` VARCHAR(191) NOT NULL,
+    `phone` VARCHAR(191) NOT NULL,
+    `contactMethod` VARCHAR(191) NOT NULL,
+    `availability` JSON NOT NULL,
+    `acceptPhysicalAudit` BOOLEAN NOT NULL DEFAULT false,
+    `status` ENUM('requested', 'in_progress', 'completed', 'onsite_required') NOT NULL DEFAULT 'requested',
+    `result` TEXT NULL,
+    `requestedAt` DATETIME(3) NOT NULL,
+    `syncedAt` DATETIME(3) NULL,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updatedAt` DATETIME(3) NOT NULL,
+
+    UNIQUE INDEX `DiagnosticRequest_digyoUserId_key`(`digyoUserId`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

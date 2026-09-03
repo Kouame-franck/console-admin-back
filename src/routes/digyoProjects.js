@@ -60,4 +60,16 @@ router.patch("/:digyoId", async (req, res) => {
   res.json(serializeDigyoProjectRequest(updated));
 });
 
+// Supprime uniquement la copie console -- digyo, source de vérité, n'est jamais touché : une
+// resynchronisation ultérieure recréerait la même ligne si la demande existe toujours côté
+// digyo. Utile pour décongestionner la liste d'un doublon ou d'une demande déjà traitée ailleurs.
+router.delete("/:digyoId", async (req, res) => {
+  const digyoId = Number(req.params.digyoId);
+  const existing = await prisma.digyoProjectRequest.findUnique({ where: { digyoId } });
+  if (!existing) return res.status(404).json({ error: "Demande introuvable." });
+
+  await prisma.digyoProjectRequest.delete({ where: { id: existing.id } });
+  res.status(204).end();
+});
+
 export default router;

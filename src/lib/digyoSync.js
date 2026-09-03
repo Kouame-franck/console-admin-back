@@ -14,3 +14,34 @@ export async function fetchRealProjects() {
 
   return res.json();
 }
+
+// Diagnostics approfondis : même clé, même principe de lecture -- voir routes/diagnostics.js >
+// POST /sync. pushDiagnosticUpdate est la seule écriture de la console vers digyo dans toute
+// l'intégration digyo <-> console (tout le reste est lecture) : nécessaire ici parce que c'est
+// la console qui décide du statut/résultat, mais que c'est digyo qui l'affiche au client (Espace
+// client, voir DeepDiagnosticStatus.jsx côté digyo).
+export async function fetchDiagnostics() {
+  const url = `${process.env.DIGYO_SYNC_URL}/api/admin-sync/diagnostics`;
+  const res = await fetch(url, {
+    headers: { "x-admin-sync-key": process.env.DIGYO_SYNC_API_KEY },
+  });
+
+  if (!res.ok) {
+    throw new Error(`La synchronisation des diagnostics a échoué (${res.status}).`);
+  }
+
+  return res.json();
+}
+
+export async function pushDiagnosticUpdate(digyoUserId, { status, result }) {
+  const url = `${process.env.DIGYO_SYNC_URL}/api/admin-sync/diagnostics/${digyoUserId}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "x-admin-sync-key": process.env.DIGYO_SYNC_API_KEY },
+    body: JSON.stringify({ status, result }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`La mise à jour du diagnostic côté digyo a échoué (${res.status}).`);
+  }
+}

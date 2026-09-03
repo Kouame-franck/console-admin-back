@@ -11,7 +11,35 @@ import { MODULES } from "../lib/catalogue.js";
 
 const router = Router();
 const includeOffer = { offer: true };
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+// Audit sécurité (2026-09-03) : cet upload n'avait aucun fileFilter -- n'importe quel type de
+// fichier passait (HTML, SVG avec script embarqué...), servi ensuite par R2 avec le Content-Type
+// que le navigateur avait bien voulu déclarer. Restreint maintenant aux mêmes formats image que
+// le reste de la console (voir blog.js > COVER_MIME_TYPES, sous-ensemble image uniquement ici :
+// ces visuels n'accueillent jamais de vidéo).
+const ANNOUNCEMENT_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    if (!ANNOUNCEMENT_MIME_TYPES.has(file.mimetype)) {
+      return cb(new Error("Format non supporté. Formats acceptés : JPG, PNG, WebP, GIF."));
+    }
+    cb(null, true);
+  },
+});
+
+function handleUploadAnnouncement(req, res, next) {
+  upload.single("image")(req, res, (err) => {
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({ error: "Fichier trop volumineux (max 5 Mo)." });
+    }
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}
+
 const ANNOUNCEMENT_SLOTS = [2, 3];
 
 router.get("/", async (req, res) => {
@@ -332,7 +360,7 @@ router.get("/:code/announcements", async (req, res) => {
   res.json(ANNOUNCEMENT_SLOTS.map((slot) => serializeAnnouncement(bySlot.get(slot), slot)));
 });
 
-router.put("/:code/announcements/:slot", upload.single("image"), async (req, res) => {
+router.put("/:code/announcements/:slot", handleUploadAnnouncement, async (req, res) => {
   const slot = Number(req.params.slot);
   if (!ANNOUNCEMENT_SLOTS.includes(slot)) {
     return res.status(400).json({ error: "Slot invalide (2 ou 3 uniquement)." });
@@ -349,7 +377,7 @@ router.put("/:code/announcements/:slot", upload.single("image"), async (req, res
 
   let imageKey = existing?.imageKey ?? null;
   if (req.file) {
-    const fileName = generateFileName(req.file.originalname, "console-announcements");
+    const fileName = generateFileName(req.file.mimetype, "console-announcements");
     const result = await uploadFile(req.file.buffer, fileName, req.file.mimetype);
     imageKey = result.fileName;
     if (existing?.imageKey) deleteFile(existing.imageKey).catch(() => {});

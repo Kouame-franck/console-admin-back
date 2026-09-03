@@ -8,9 +8,10 @@
 // cette indirection. Même principe que utils/sms/index.js côté s-school (PILOTES + SMS_PROVIDER).
 import * as moneyfusion from "./moneyfusion.js";
 import * as kadevpay from "./kadevpay.js";
+import * as cinetpay from "./cinetpay.js";
 import * as simulation from "./simulation.js";
 
-const FOURNISSEURS = { moneyfusion, kadevpay, simulation };
+const FOURNISSEURS = { moneyfusion, kadevpay, cinetpay, simulation };
 
 function fournisseur() {
   const nom = process.env.PAIEMENT_PROVIDER || "moneyfusion";

@@ -11,6 +11,9 @@ import performanceConfigRoutes from "./performanceConfig.js";
 import publicPortalRoutes from "./publicPortal.js";
 import digyoProjectsRoutes from "./digyoProjects.js";
 import blogRoutes from "./blog.js";
+import contactMessagesRoutes from "./contactMessages.js";
+import diagnosticsRoutes from "./diagnostics.js";
+import supportConversationsRoutes from "./supportConversations.js";
 
 const router = Router();
 
@@ -28,6 +31,9 @@ router.use("/pricing-settings", requireAuth, pricingSettingsRoutes);
 router.use("/performance-config", requireAuth, performanceConfigRoutes);
 router.use("/digyo-projects", requireAuth, digyoProjectsRoutes);
 router.use("/blog", requireAuth, blogRoutes);
+router.use("/contact-messages", requireAuth, contactMessagesRoutes);
+router.use("/diagnostics", requireAuth, diagnosticsRoutes);
+router.use("/support-conversations", requireAuth, supportConversationsRoutes);
 router.use("/public", publicPortalRoutes);
 
 export default router;

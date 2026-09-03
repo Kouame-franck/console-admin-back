@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import {
   serializeOffer,
@@ -6,6 +7,8 @@ import {
   serializeAnnouncement,
   serializeEstablishment,
   serializeBlogPost,
+  serializeBlogComment,
+  serializeSupportConversation,
 } from "../lib/serializers.js";
 import { STATUS_TO_API } from "../lib/mappers.js";
 import { publicMutationLimiter } from "../middleware/rateLimit.js";
@@ -17,9 +20,18 @@ const router = Router();
 const toDateStr = (date) => (date ? date.toISOString().slice(0, 10) : null);
 const ANNOUNCEMENT_SLOTS = [2, 3];
 
+// Audit sécurité (2026-09-03) : comparaison à temps constant, même principe que requireSyncKey
+// côté digyo-site (adminSync.js) -- un simple `!==` fuit la longueur/le préfixe correct de la
+// clé via le temps de réponse.
 function requirePortalKey(req, res, next) {
   const key = req.headers["x-portal-key"];
-  if (!key || key !== process.env.SCHOOL_PORTAL_API_KEY) {
+  const attendu = process.env.SCHOOL_PORTAL_API_KEY;
+  if (!key || !attendu) {
+    return res.status(401).json({ error: "Non autorisé." });
+  }
+  const bufKey = Buffer.from(key);
+  const bufAttendu = Buffer.from(attendu);
+  if (bufKey.length !== bufAttendu.length || !crypto.timingSafeEqual(bufKey, bufAttendu)) {
     return res.status(401).json({ error: "Non autorisé." });
   }
   next();
@@ -82,6 +94,182 @@ router.get("/blog/:slug", async (req, res) => {
   const row = await prisma.blogPost.findUnique({ where: { slug: req.params.slug } });
   if (!row || !row.published) return res.status(404).json({ error: "Article introuvable." });
   res.json(serializeBlogPost(row));
+});
+
+async function findPublishedPost(slug) {
+  const post = await prisma.blogPost.findUnique({ where: { slug } });
+  return post && post.published ? post : null;
+}
+
+// Likes + commentaires publics d'un article : remplace le localStorage côté navigateur (voir
+// digyo-site/front/src/hooks/usePostReactions.js) par un comptage réellement partagé entre
+// visiteurs. `visitorId` (query) est optionnel — sans lui on renvoie juste le total et `liked:
+// false`, utile pour un simple badge de compteur (voir LikeIndicator.jsx) sans connaître le
+// visiteur.
+// Compteur seul, sans les commentaires -- utilisé par les cartes de la liste d'articles
+// (LikeIndicator.jsx, plusieurs par page) pour éviter de rapatrier tous les commentaires de
+// chaque article juste pour afficher un badge. /reactions ci-dessous reste utilisé pour la page
+// de détail d'un article, qui a besoin des deux.
+router.get("/blog/:slug/likes", async (req, res) => {
+  const post = await findPublishedPost(req.params.slug);
+  if (!post) return res.status(404).json({ error: "Article introuvable." });
+
+  const { visitorId } = req.query;
+  const [likes, mine] = await Promise.all([
+    prisma.blogLike.count({ where: { blogPostId: post.id } }),
+    visitorId
+      ? prisma.blogLike.findUnique({ where: { blogPostId_visitorId: { blogPostId: post.id, visitorId } } })
+      : null,
+  ]);
+
+  res.json({ likes, liked: Boolean(mine) });
+});
+
+router.get("/blog/:slug/reactions", async (req, res) => {
+  const post = await findPublishedPost(req.params.slug);
+  if (!post) return res.status(404).json({ error: "Article introuvable." });
+
+  const { visitorId } = req.query;
+  const [likes, comments, mine] = await Promise.all([
+    prisma.blogLike.count({ where: { blogPostId: post.id } }),
+    prisma.blogComment.findMany({ where: { blogPostId: post.id }, orderBy: { createdAt: "asc" } }),
+    visitorId
+      ? prisma.blogLike.findUnique({ where: { blogPostId_visitorId: { blogPostId: post.id, visitorId } } })
+      : null,
+  ]);
+
+  res.json({ likes, liked: Boolean(mine), comments: comments.map(serializeBlogComment) });
+});
+
+// Bascule explicite (pas un simple incrément) : le navigateur connaît déjà son état courant
+// (usePostReactions optimiste) et nous dit où il veut aller — idempotent si rejoué deux fois.
+router.post("/blog/:slug/like", publicMutationLimiter, requirePortalKey, async (req, res) => {
+  const post = await findPublishedPost(req.params.slug);
+  if (!post) return res.status(404).json({ error: "Article introuvable." });
+
+  const { visitorId, liked } = req.body || {};
+  if (!visitorId) return res.status(400).json({ error: "visitorId requis." });
+
+  if (liked) {
+    await prisma.blogLike.upsert({
+      where: { blogPostId_visitorId: { blogPostId: post.id, visitorId } },
+      create: { blogPostId: post.id, visitorId },
+      update: {},
+    });
+  } else {
+    await prisma.blogLike.deleteMany({ where: { blogPostId: post.id, visitorId } });
+  }
+
+  const likes = await prisma.blogLike.count({ where: { blogPostId: post.id } });
+  res.json({ likes, liked: Boolean(liked) });
+});
+
+router.post("/blog/:slug/comments", publicMutationLimiter, requirePortalKey, async (req, res) => {
+  const post = await findPublishedPost(req.params.slug);
+  if (!post) return res.status(404).json({ error: "Article introuvable." });
+
+  const name = (req.body?.name || "").trim();
+  const text = (req.body?.text || "").trim();
+  if (!name || !text) return res.status(400).json({ error: "name et text requis." });
+  if (name.length > 100 || text.length > 2000) {
+    return res.status(400).json({ error: "Nom ou commentaire trop long." });
+  }
+
+  const comment = await prisma.blogComment.create({ data: { blogPostId: post.id, name, text } });
+  res.status(201).json(serializeBlogComment(comment));
+});
+
+// Message du formulaire de contact digyo (voir digyo-site/back/src/server.js > POST
+// /api/contact) — la console est désormais l'interface de gestion, digyo ne fait plus que
+// relayer puis notifier par email (voir routes/contactMessages.js côté console).
+router.post("/contact", publicMutationLimiter, requirePortalKey, async (req, res) => {
+  const { name, email, service, message } = req.body || {};
+  if (!name || !email || !message) {
+    return res.status(400).json({ error: "name, email et message sont requis." });
+  }
+  // Audit sécurité (2026-09-03) : ces champs n'avaient aucun plafond, contrairement aux
+  // commentaires de blog et au chat -- alignés sur les mêmes ordres de grandeur.
+  if (name.length > 100 || email.length > 200 || (service && service.length > 100) || message.length > 5000) {
+    return res.status(400).json({ error: "Un des champs dépasse la longueur autorisée." });
+  }
+
+  const created = await prisma.contactMessage.create({
+    data: { name, email, service: service || null, message },
+  });
+  res.status(201).json({ ok: true, id: created.id });
+});
+
+// Chat d'assistance (widget SupportWidget.jsx côté digyo) -- une conversation par visiteur
+// anonyme (`visitorToken`, généré côté navigateur), retrouvée d'un message à l'autre. La
+// console est la seule source de vérité (voir schema.prisma > SupportConversation) ; digyo ne
+// fait que relayer (routes/support.js).
+router.post("/support/messages", publicMutationLimiter, requirePortalKey, async (req, res) => {
+  const { visitorToken, text, name, email } = req.body || {};
+  const trimmed = (text || "").trim();
+  if (!visitorToken || !trimmed) {
+    return res.status(400).json({ error: "visitorToken et text sont requis." });
+  }
+  if (trimmed.length > 2000) return res.status(400).json({ error: "Message trop long." });
+
+  let conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  const isNew = !conversation;
+
+  if (!conversation) {
+    conversation = await prisma.supportConversation.create({
+      data: { visitorToken, visitorName: name || null, visitorEmail: email || null },
+    });
+  } else {
+    const data = { unreadForStaff: true, lastMessageAt: new Date() };
+    // Un visiteur qui réécrit sur une conversation déjà classée "résolue" la rouvre
+    // implicitement -- le widget n'a pas de bouton "nouvelle conversation".
+    if (conversation.status === "resolved") data.status = "open";
+    if (name && !conversation.visitorName) data.visitorName = name;
+    if (email && !conversation.visitorEmail) data.visitorEmail = email;
+    conversation = await prisma.supportConversation.update({ where: { id: conversation.id }, data });
+  }
+
+  await prisma.supportMessage.create({
+    data: { conversationId: conversation.id, from: "visitor", text: trimmed },
+  });
+
+  if (isNew) {
+    await prisma.supportMessage.create({
+      data: {
+        conversationId: conversation.id,
+        from: "auto",
+        text: "Merci pour votre message ! Un membre de l'équipe digyo vous répondra dès que possible.",
+      },
+    });
+  }
+
+  res.status(201).json({ conversationId: conversation.id, isNew });
+});
+
+router.get("/support/messages", async (req, res) => {
+  const { visitorToken } = req.query;
+  if (!visitorToken) return res.status(400).json({ error: "visitorToken requis." });
+
+  const conversation = await prisma.supportConversation.findUnique({
+    where: { visitorToken },
+    include: { messages: { orderBy: { createdAt: "asc" } } },
+  });
+  if (!conversation) return res.json({ status: null, messages: [] });
+
+  if (conversation.unreadForVisitor) {
+    await prisma.supportConversation.update({ where: { id: conversation.id }, data: { unreadForVisitor: false } });
+  }
+
+  res.json(serializeSupportConversation(conversation));
+});
+
+// Poll léger pour le badge du bouton flottant quand le widget est fermé -- sans effet de bord,
+// contrairement à /support/messages ci-dessus qui marque la conversation comme lue.
+router.get("/support/unread", async (req, res) => {
+  const { visitorToken } = req.query;
+  if (!visitorToken) return res.status(400).json({ error: "visitorToken requis." });
+
+  const conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  res.json({ unread: conversation?.unreadForVisitor ?? false });
 });
 
 router.get("/etablissements/:sschoolId", requirePortalKey, async (req, res) => {

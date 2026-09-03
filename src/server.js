@@ -2,10 +2,15 @@ import "dotenv/config";
 import "express-async-errors";
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import routes from "./routes/index.js";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Audit sécurité (2026-09-03) : en-têtes de sécurité de base (X-Frame-Options, X-Content-Type-
+// Options, retire X-Powered-By...) -- console pure API, jamais de contenu à embarquer en iframe.
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // L'app tourne toujours derrière Apache (reverse proxy) — nécessaire pour que
 // express-rate-limit identifie correctement l'IP réelle du client via X-Forwarded-For.

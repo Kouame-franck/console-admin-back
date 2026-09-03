@@ -131,6 +131,88 @@ export function serializeBlogPost(b) {
     body: b.body,
     published: b.published,
     updatedAt: b.updatedAt.toISOString(),
+    // Présents uniquement quand la requête Prisma inclut `_count` (liste/détail console,
+    // voir routes/blog.js) — absents côté relais public (digyo n'a pas besoin de ces compteurs
+    // administratifs, il affiche les siens via GET /public/blog/:slug/reactions).
+    ...(b._count ? { commentsCount: b._count.comments, likesCount: b._count.likes } : {}),
+  };
+}
+
+export function serializeBlogComment(c) {
+  return {
+    id: c.id,
+    name: c.name,
+    text: c.text,
+    date: c.createdAt.toISOString(),
+  };
+}
+
+export function serializeDiagnosticRequest(d) {
+  return {
+    id: d.id,
+    digyoUserId: d.digyoUserId,
+    companyName: d.companyName,
+    clientName: d.clientName,
+    clientEmail: d.clientEmail,
+    sector: d.sector,
+    quickScore: d.quickScore,
+    detailedChallenge: d.detailedChallenge,
+    constraints: d.constraints,
+    businessGoals: d.businessGoals ?? [],
+    differentiation: d.differentiation,
+    clientele: d.clientele,
+    annualRevenue: d.annualRevenue,
+    decisionMaker: d.decisionMaker,
+    lostProspects: d.lostProspects,
+    interestAreas: d.interestAreas ?? [],
+    investmentBudget: d.investmentBudget,
+    digitalImportance: d.digitalImportance,
+    expectations: d.expectations,
+    address: d.address,
+    phone: d.phone,
+    contactMethod: d.contactMethod,
+    availability: d.availability ?? [],
+    acceptPhysicalAudit: d.acceptPhysicalAudit,
+    status: d.status,
+    result: d.result,
+    requestedAt: d.requestedAt.toISOString(),
+    syncedAt: d.syncedAt ? d.syncedAt.toISOString() : null,
+  };
+}
+
+export function serializeSupportMessage(m) {
+  return {
+    id: m.id,
+    from: m.from,
+    text: m.text,
+    date: m.createdAt.toISOString(),
+  };
+}
+
+export function serializeSupportConversation(c) {
+  return {
+    id: c.id,
+    visitorName: c.visitorName,
+    visitorEmail: c.visitorEmail,
+    status: c.status,
+    unreadForStaff: c.unreadForStaff,
+    lastMessageAt: c.lastMessageAt.toISOString(),
+    createdAt: c.createdAt.toISOString(),
+    // `messages` n'est présent que si la requête Prisma les a inclus (détail d'une conversation,
+    // voir routes/supportConversations.js) -- absent dans la liste, pour rester légère.
+    ...(c.messages ? { messages: c.messages.map(serializeSupportMessage) } : {}),
+  };
+}
+
+export function serializeContactMessage(m) {
+  return {
+    id: m.id,
+    name: m.name,
+    email: m.email,
+    service: m.service,
+    message: m.message,
+    read: m.read,
+    createdAt: m.createdAt.toISOString(),
   };
 }
 
