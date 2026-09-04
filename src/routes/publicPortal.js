@@ -9,6 +9,7 @@ import {
   serializeBlogPost,
   serializeBlogComment,
   serializeSupportConversation,
+  serializePayment,
 } from "../lib/serializers.js";
 import { STATUS_TO_API } from "../lib/mappers.js";
 import { publicMutationLimiter } from "../middleware/rateLimit.js";
@@ -333,9 +334,13 @@ async function reponseStatut({ pending, statut, resultat, dejaTraite }) {
   if (statut !== "paye") return { statut };
 
   if (dejaTraite) {
-    // Le navigateur peut repasser ici après coup : on rejoue ce qui est déjà acquis. Le mot de
-    // passe admin n'est pas stocké, il n'est donc jamais rejoué — il n'est montré qu'une fois,
-    // au moment de la création, et parallèlement envoyé par email.
+    // Le navigateur peut repasser ici après coup (webhook et polling navigateur sont en course,
+    // n'importe lequel peut avoir traité en premier) : on rejoue ce qui est déjà acquis.
+    // adminLogin/adminPassword/paymentCode sont persistés sur PendingPayment précisément pour
+    // pouvoir les rejouer ici -- avant, seul l'appel "gagnant" (presque toujours le webhook,
+    // serveur-à-serveur donc plus rapide que la navigation du visiteur) les voyait, l'autre
+    // canal ne les affichait jamais (constaté en prod le 2026-09-04, écran de confirmation
+    // digyo toujours vide).
     if (pending.type === "addon") {
       // Le detail du credit n'est pas rejoue : il a ete applique une fois cote s-school, et
       // c'est le solde affiche par s-school qui fait foi.
@@ -349,14 +354,23 @@ async function reponseStatut({ pending, statut, resultat, dejaTraite }) {
             include: { offer: true },
           })
         : null;
-      return { statut, etablissement: etab ? serializeEstablishment(etab) : null };
+      return {
+        statut,
+        etablissement: etab ? serializeEstablishment(etab) : null,
+        admin: pending.adminLogin ? { login: pending.adminLogin, password: pending.adminPassword } : null,
+        paiement: pending.paymentCode ? { reference: pending.paymentCode, recuToken: pending.recuToken } : null,
+      };
     }
 
     const etab = await prisma.establishment.findUnique({
       where: { id: pending.establishmentId },
       include: { offer: true },
     });
-    return { statut, abonnement: etab ? serializePlanInfo(etab) : null };
+    return {
+      statut,
+      abonnement: etab ? serializePlanInfo(etab) : null,
+      paiement: pending.paymentCode ? { reference: pending.paymentCode, recuToken: pending.recuToken } : null,
+    };
   }
 
   if (pending.type === "addon") {
@@ -368,6 +382,7 @@ async function reponseStatut({ pending, statut, resultat, dejaTraite }) {
       statut,
       etablissement: resultat ? serializeEstablishment(resultat.establishment) : null,
       admin: resultat?.admin ?? null,
+      paiement: resultat?.paiement ?? null,
     };
   }
 
@@ -552,6 +567,20 @@ router.get("/paiement/statut/:token", requirePortalKey, async (req, res) => {
     console.error("Erreur vérification paiement :", err);
     res.status(502).json({ error: "Vérification du paiement indisponible pour le moment." });
   }
+});
+
+// Reçu de paiement, accédé depuis le lien envoyé par email (voir mailer.js) ou depuis l'écran de
+// confirmation -- clé d'accès volontairement distincte du code humain affiché (PAY-0001,
+// séquentiel donc énumérable, voir Payment.recuToken côté schema.prisma) : n'importe qui
+// devinant "PAY-0002" ne doit jamais pouvoir lire le reçu d'un autre client.
+router.get("/paiement/recu/:recuToken", requirePortalKey, async (req, res) => {
+  const payment = await prisma.payment.findUnique({
+    where: { recuToken: req.params.recuToken },
+    include: { establishment: true },
+  });
+  if (!payment) return res.status(404).json({ error: "Reçu introuvable." });
+
+  res.json(serializePayment(payment));
 });
 
 // Étape 2bis — propre aux agrégateurs en mode "widget" (KadevPay aujourd'hui) : le navigateur

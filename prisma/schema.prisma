@@ -119,6 +119,12 @@ model Payment {
   statut          PaymentStatus
   transactionId   String?
   createdAt       DateTime      @default(now())
+  // Jeton aléatoire distinct de `code` (qui est séquentiel : PAY-0001, PAY-0002...), utilisé
+  // pour le lien du reçu envoyé par email (GET /api/public/paiement/recu/:recuToken). `code`
+  // seul ne peut jamais servir de clé publique : n'importe qui pourrait énumérer les reçus des
+  // autres clients en incrémentant. Nullable : les paiements déjà existants avant cette
+  // migration n'en ont pas et n'ont simplement pas de lien de reçu rétroactif.
+  recuToken       String?       @unique
 }
 
 enum SignupStatus {
@@ -179,6 +185,23 @@ model PendingPayment {
   responsableTelephone String?
   responsableEmail     String?
   establishmentCode    String?
+  // Identifiants du compte admin Sschool créé par ce paiement (inscription uniquement) --
+  // générés une seule fois par provisionnerNouvelleEcole (billing.js), conservés ici pour que
+  // la page de confirmation puisse les réafficher de façon fiable même quand ce n'est pas cet
+  // appel qui a traité le paiement (webhook et polling navigateur peuvent arriver dans
+  // n'importe quel ordre — voir verifierEtTraiter/dejaTraite ; avant, seul l'appel "gagnant"
+  // voyait jamais le mot de passe, qui n'était pas persisté, donc jamais rejoué si c'était le
+  // webhook plutôt que le navigateur qui traitait en premier -- observé en prod le 2026-09-04,
+  // l'écran de confirmation n'affichait jamais rien). L'email envoyé en parallèle reste le canal
+  // de secours si le visiteur ferme l'onglet avant lecture.
+  adminLogin           String?
+  adminPassword        String?
+  // Référence (code humain) et jeton de reçu (voir Payment.recuToken) du Payment créé par ce
+  // paiement -- permettent à reponseStatut() de renvoyer un lien de reçu fiable même en
+  // relecture "déjà traité", sans deviner "le dernier Payment de cet établissement" (faux dès
+  // qu'il y a eu plus d'un paiement).
+  paymentCode          String?
+  recuToken            String?
   addonOffer           AddonOffer? @relation(fields: [addonOfferId], references: [id])
   addonOfferId         Int?
 }

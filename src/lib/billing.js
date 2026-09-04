@@ -1,9 +1,10 @@
+import crypto from "crypto";
 import { prisma } from "./prisma.js";
 import { nextCode, genererTransactionId } from "./codes.js";
 import { calculerPeriode } from "./abonnement.js";
 import { initierPaiementElectronique, verifierPaiementElectronique } from "./paiement/index.js";
 import { createRealEtablissement, crediterSmsEtablissement } from "./sschoolSync.js";
-import { sendSignupCredentialsEmail } from "./mailer.js";
+import { sendSignupCredentialsEmail, sendRenewalConfirmationEmail } from "./mailer.js";
 import { PAYMENT_METHOD_TO_DB } from "./mappers.js";
 
 // Autorité de facturation unique. La console initie tous les paiements d'abonnement, tient
@@ -45,6 +46,7 @@ export async function activerOffre({
 
   const code = await nextCode(prisma, "payment", "PAY");
   const transactionId = transactionIdGateway || genererTransactionId();
+  const recuToken = crypto.randomBytes(16).toString("hex");
   await prisma.payment.create({
     data: {
       code,
@@ -56,6 +58,7 @@ export async function activerOffre({
       modePaiement: PAYMENT_METHOD_TO_DB[modePaiement] ?? "mobile_money",
       statut: "paye",
       transactionId,
+      recuToken,
     },
   });
 
@@ -63,6 +66,7 @@ export async function activerOffre({
     establishment: updated,
     paiement: {
       reference: code,
+      recuToken,
       transactionId,
       montant,
       modePaiement: modePaiement ?? "Mobile Money",
@@ -211,6 +215,7 @@ async function provisionnerNouvelleEcole(pending, offer, montantPaye, transactio
   });
 
   const paymentCode = await nextCode(prisma, "payment", "PAY");
+  const recuToken = crypto.randomBytes(16).toString("hex");
   await prisma.payment.create({
     data: {
       code: paymentCode,
@@ -222,12 +227,25 @@ async function provisionnerNouvelleEcole(pending, offer, montantPaye, transactio
       modePaiement: "mobile_money",
       statut: "paye",
       transactionId: transactionIdGateway,
+      recuToken,
     },
   });
 
+  // Persisté ici (pas seulement renvoyé dans le retour de fonction) : webhook et polling
+  // navigateur sont en course pour traiter ce paiement, un seul "gagne" et voit ce retour --
+  // sans le stocker, l'autre canal (typiquement le navigateur, qui arrive après le webhook
+  // serveur-à-serveur) ne rejouerait jamais ces identifiants ni ce lien de reçu (voir
+  // reponseStatut > dejaTraite ci-dessous). Constaté en prod le 2026-09-04 : l'écran de
+  // confirmation digyo n'affichait jamais les identifiants.
   await prisma.pendingPayment.update({
     where: { id: pending.id },
-    data: { establishmentCode: code },
+    data: {
+      establishmentCode: code,
+      adminLogin: sschoolResult.admin.login,
+      adminPassword: sschoolResult.admin.password,
+      paymentCode,
+      recuToken,
+    },
   });
 
   sendSignupCredentialsEmail({
@@ -236,11 +254,23 @@ async function provisionnerNouvelleEcole(pending, offer, montantPaye, transactio
     login: sschoolResult.admin.login,
     password: sschoolResult.admin.password,
     loginUrl: process.env.SSCHOOL_LOGIN_URL,
+    recuUrl: process.env.DIGYO_RECU_URL_BASE ? `${process.env.DIGYO_RECU_URL_BASE}${recuToken}` : null,
   }).catch((err) =>
     console.error(`Paiement ${pending.token} : envoi email identifiants échoué :`, err.message)
   );
 
-  return { type: "signup", establishment: created, admin: sschoolResult.admin };
+  return {
+    type: "signup",
+    establishment: created,
+    admin: sschoolResult.admin,
+    paiement: {
+      reference: paymentCode,
+      recuToken,
+      transactionId: transactionIdGateway,
+      montant: montantPaye,
+      date: start.toISOString(),
+    },
+  };
 }
 
 async function activerRenouvellement(pending, offer, montantPaye, transactionIdGateway) {
@@ -262,6 +292,28 @@ async function activerRenouvellement(pending, offer, montantPaye, transactionIdG
     transactionId: transactionIdGateway,
     montantVerse: montantPaye,
   });
+
+  // Même besoin que provisionnerNouvelleEcole ci-dessus : persisté pour que reponseStatut
+  // (dejaTraite) puisse renvoyer un lien de reçu fiable quel que soit le canal qui a traité en
+  // premier. Contrairement au signup, pas d'identifiants à sauvegarder ici (le compte existe
+  // déjà) -- seulement le renouvellement lui-même n'envoyait jusqu'ici aucune confirmation,
+  // ni reçu ni email (constaté en prod le 2026-09-04 : juste un toast "Paiement confirmé",
+  // rien de plus, contrairement à l'inscription qui envoie au moins un email).
+  await prisma.pendingPayment.update({
+    where: { id: pending.id },
+    data: { paymentCode: paiement.reference, recuToken: paiement.recuToken },
+  });
+
+  sendRenewalConfirmationEmail({
+    to: establishment.responsableEmail,
+    etablissementNom: establishment.name,
+    formule: offer.name,
+    montant: paiement.montant,
+    validiteFin: updated.validityEnd,
+    recuUrl: process.env.SSCHOOL_RECU_URL_BASE ? `${process.env.SSCHOOL_RECU_URL_BASE}${paiement.recuToken}` : null,
+  }).catch((err) =>
+    console.error(`Paiement ${pending.token} : envoi email confirmation renouvellement échoué :`, err.message)
+  );
 
   return { type: "renouvellement", establishment: updated, paiement };
 }
