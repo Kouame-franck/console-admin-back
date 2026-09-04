@@ -15,6 +15,7 @@ import { publicMutationLimiter } from "../middleware/rateLimit.js";
 import { MODULES, LIMITES } from "../lib/catalogue.js";
 import { activerOffre, initierAbonnement, verifierEtTraiter, enregistrerReferenceExterne } from "../lib/billing.js";
 import { jetonDepuisWebhook } from "../lib/paiement/index.js";
+import { emailDisponibleSschool } from "../lib/sschoolSync.js";
 
 const router = Router();
 const toDateStr = (date) => (date ? date.toISOString().slice(0, 10) : null);
@@ -400,6 +401,25 @@ router.post("/demo/acceder", publicMutationLimiter, requirePortalKey, async (req
   });
 });
 
+// Vérification proactive, appelée par digyo avant même d'afficher l'étape paiement (voir
+// SubscribeModal.jsx) : jusqu'ici, un email de responsable déjà utilisé côté Sschool n'était
+// détecté qu'au moment de provisionner l'établissement, APRÈS paiement confirmé -- le client
+// payait avant de découvrir le problème (constaté en prod le 2026-09-04). "Initier le paiement
+// doit signifier que le dossier du client est complet et valide" : tout ce qui peut être
+// vérifié avant doit l'être avant, jamais après avoir pris son argent.
+router.get("/signup/email-disponible", async (req, res) => {
+  const email = (req.query.email || "").trim();
+  if (!email) return res.status(400).json({ error: "email requis." });
+
+  try {
+    const available = await emailDisponibleSschool(email);
+    res.json({ available });
+  } catch (err) {
+    console.error("Erreur vérification email signup :", err);
+    res.status(502).json({ error: "Impossible de vérifier cet email pour le moment." });
+  }
+});
+
 // Étape 1a — nouvelle école, demandée depuis digyo. Aucun établissement n'est créé à ce stade :
 // seulement une demande en attente, provisionnée si et seulement si le paiement est confirmé.
 router.post("/signup/initier", publicMutationLimiter, requirePortalKey, async (req, res) => {
@@ -410,6 +430,15 @@ router.post("/signup/initier", publicMutationLimiter, requirePortalKey, async (r
 
   const offer = await prisma.offer.findUnique({ where: { slug: b.offerSlug } });
   if (!offer || !offer.active) return res.status(400).json({ error: "Offre invalide ou inactive." });
+
+  // Garde-fou en plus de la vérification proactive (GET /signup/email-disponible) : couvre le
+  // cas d'un email pris entre l'affichage de l'étape paiement et le clic sur "Payer", et
+  // protège aussi un appel direct à cette route qui n'aurait jamais fait la vérification
+  // préalable. Même principe que la vérification d'offre juste au-dessus : jamais initier de
+  // paiement pour un dossier qu'on sait déjà invalide.
+  if (!(await emailDisponibleSschool(b.responsableEmail))) {
+    return res.status(409).json({ error: "Un compte existe déjà avec cet email de responsable." });
+  }
 
   try {
     const { url, token, mode, widget, returnUrl } = await initierAbonnement({

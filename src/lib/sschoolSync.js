@@ -35,6 +35,26 @@ export async function createRealEtablissement({ nom, address, email, tel, respon
   return data;
 }
 
+// Vérifie la disponibilité d'un email AVANT d'initier un paiement (voir routes/publicPortal.js
+// > GET /signup/email-disponible, POST /signup/initier) -- sans ça, createRealEtablissement ne
+// détecte le doublon qu'au moment de provisionner, une fois le paiement déjà confirmé : le
+// client payait avant de découvrir que son email était déjà pris (constaté en prod le
+// 2026-09-04). "Initier le paiement doit signifier que le dossier du client est complet et
+// valide" -- toute vérification qui peut se faire avant doit se faire avant.
+export async function emailDisponibleSschool(email) {
+  const url = `${process.env.SSCHOOL_SYNC_URL}/admin-sync/check-email?email=${encodeURIComponent(email)}`;
+  const res = await fetch(url, {
+    headers: { "x-admin-sync-key": process.env.SSCHOOL_SYNC_API_KEY },
+  });
+
+  if (!res.ok) {
+    throw new Error(`La vérification de l'email a échoué (${res.status}).`);
+  }
+
+  const data = await res.json();
+  return data.available;
+}
+
 // Supprime réellement et intégralement un établissement dans Sschool (établissement, users,
 // étudiants, notes, cursus... — voir routes/adminSync.js côté sschool pour le détail complet
 // de la cascade). Appelée par la console AVANT de retirer sa propre fiche de suivi, pour ne
