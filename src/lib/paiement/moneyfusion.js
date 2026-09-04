@@ -38,9 +38,19 @@ export async function initier({ montant, nomArticle, nomClient, numeroClient, in
 // Traduit le vocabulaire de Money Fusion ('pending' | 'paid' | 'failed' | 'no paid') vers le
 // vocabulaire commun ('en_attente' | 'paye' | 'echoue') — voir index.js pour la liste
 // exhaustive des trois seules valeurs que le reste de la console est autorisé à connaître.
+//
+// "echoue" est un verrou définitif côté billing.js (verifierEtTraiter) : une fois posé, plus
+// aucune revérification n'a lieu. "no paid" ne veut pas dire "rejeté" mais "pas encore confirmé
+// à cet instant" -- un paiement mobile money peut mettre quelques secondes à quelques dizaines
+// de secondes à se confirmer côté Money Fusion après validation par l'opérateur. Un webhook ou
+// un polling qui tombe pile dans cette fenêtre voyait "no paid" et verrouillait "echoue" à
+// tort, alors que le paiement finissait par aboutir juste après (constaté le 2026-09-04 :
+// paiement réel confirmé "paid" chez Money Fusion quelques minutes après avoir été enregistré
+// "echoue" côté console). Seul "failed" (rejet explicite) verrouille désormais "echoue" ; tout
+// le reste, y compris "no paid", reste "en_attente" et sera revérifié au prochain appel.
 function normaliserStatut(statutBrut) {
   if (statutBrut === "paid") return "paye";
-  if (statutBrut === "failed" || statutBrut === "no paid") return "echoue";
+  if (statutBrut === "failed") return "echoue";
   return "en_attente";
 }
 
