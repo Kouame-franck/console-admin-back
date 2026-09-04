@@ -59,9 +59,19 @@ export async function verifier(token) {
   if (!response.ok) throw new Error(await response.text());
   const data = await response.json();
 
+  // `Montant` est le net déjà amputé de la commission Money Fusion (`frais`) -- pas ce que le
+  // client a réellement payé. billing.js (confirmerEtProvisionner) compare ce montant au prix
+  // brut annoncé (PendingPayment.montant) et bloque l'activation si inférieur : renvoyer le net
+  // seul faisait donc échouer CE contrôle sur CHAQUE paiement Money Fusion, sans exception
+  // (constaté le 2026-09-04 : 194 reçus vs 200 attendus, alors que le client avait bien payé
+  // 200 -- seuls 6 étaient la commission du prestataire). Montant + frais reconstitue le total
+  // réellement payé par le client.
+  const montantNet = data.data?.Montant ?? null;
+  const frais = data.data?.frais ?? 0;
+
   return {
     statut: normaliserStatut(data.data?.statut),
-    montant: data.data?.Montant ?? null,
+    montant: montantNet !== null ? montantNet + frais : null,
     transactionId: data.data?.numeroTransaction ?? null,
   };
 }
