@@ -80,6 +80,10 @@ router.delete("/:slug", async (req, res) => {
   if (!existing) return res.status(404).json({ error: "Offre introuvable." });
 
   await prisma.establishment.updateMany({ where: { offerId: existing.id }, data: { offerId: null } });
+  // PendingPayment.offerId référence aussi Offer (paiements de signup/renouvellement passés,
+  // même traités) — sans ce nettoyage, la contrainte de clé étrangère fait échouer la
+  // suppression dès qu'une offre a le moindre historique de paiement.
+  await prisma.pendingPayment.updateMany({ where: { offerId: existing.id }, data: { offerId: null } });
   await prisma.offer.delete({ where: { slug: req.params.slug } });
   res.status(204).end();
 });
