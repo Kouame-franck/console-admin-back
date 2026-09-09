@@ -202,9 +202,8 @@ router.post("/contact", publicMutationLimiter, requirePortalKey, async (req, res
 });
 
 // Chat d'assistance (widget SupportWidget.jsx côté digyo) -- une conversation par visiteur
-// anonyme (`visitorToken`, généré côté navigateur), retrouvée d'un message à l'autre. La
-// console est la seule source de vérité (voir schema.prisma > SupportConversation) ; digyo ne
-// fait que relayer (routes/support.js).
+// authentifié, retrouvée d'un message à l'autre. La console est la seule source de vérité (voir
+// schema.prisma > SupportConversation) ; digyo ne fait que relayer (routes/support.js).
 router.post("/support/messages", publicMutationLimiter, requirePortalKey, async (req, res) => {
   const { visitorToken, text, name, email } = req.body || {};
   const trimmed = (text || "").trim();
@@ -213,7 +212,13 @@ router.post("/support/messages", publicMutationLimiter, requirePortalKey, async 
   }
   if (trimmed.length > 2000) return res.status(400).json({ error: "Message trop long." });
 
-  let conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  // L'email (désormais toujours fourni : digyo exige une connexion avant d'envoyer) prime sur
+  // le visitorToken pour retrouver la conversation -- un même visiteur connecté depuis un
+  // nouveau navigateur (donc un nouveau token) doit retomber sur son historique existant.
+  let conversation = email ? await prisma.supportConversation.findFirst({ where: { visitorEmail: email } }) : null;
+  if (!conversation) {
+    conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  }
   const isNew = !conversation;
 
   if (!conversation) {
@@ -248,13 +253,16 @@ router.post("/support/messages", publicMutationLimiter, requirePortalKey, async 
 });
 
 router.get("/support/messages", async (req, res) => {
-  const { visitorToken } = req.query;
+  const { visitorToken, visitorEmail } = req.query;
   if (!visitorToken) return res.status(400).json({ error: "visitorToken requis." });
 
-  const conversation = await prisma.supportConversation.findUnique({
-    where: { visitorToken },
-    include: { messages: { orderBy: { createdAt: "asc" } } },
-  });
+  const include = { messages: { orderBy: { createdAt: "asc" } } };
+  let conversation = visitorEmail
+    ? await prisma.supportConversation.findFirst({ where: { visitorEmail }, include })
+    : null;
+  if (!conversation) {
+    conversation = await prisma.supportConversation.findUnique({ where: { visitorToken }, include });
+  }
   if (!conversation) return res.json({ status: null, messages: [] });
 
   if (conversation.unreadForVisitor) {
@@ -267,10 +275,15 @@ router.get("/support/messages", async (req, res) => {
 // Poll léger pour le badge du bouton flottant quand le widget est fermé -- sans effet de bord,
 // contrairement à /support/messages ci-dessus qui marque la conversation comme lue.
 router.get("/support/unread", async (req, res) => {
-  const { visitorToken } = req.query;
+  const { visitorToken, visitorEmail } = req.query;
   if (!visitorToken) return res.status(400).json({ error: "visitorToken requis." });
 
-  const conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  let conversation = visitorEmail
+    ? await prisma.supportConversation.findFirst({ where: { visitorEmail } })
+    : null;
+  if (!conversation) {
+    conversation = await prisma.supportConversation.findUnique({ where: { visitorToken } });
+  }
   res.json({ unread: conversation?.unreadForVisitor ?? false });
 });
 
