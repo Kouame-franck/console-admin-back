@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
+import { PAYMENT_STATUS_TO_API } from "../lib/mappers.js";
 
 const router = Router();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -28,6 +29,22 @@ function trendFor(delta) {
 
 function formatDelta(delta) {
   return delta === null ? null : `${delta >= 0 ? "+" : ""}${delta}%`;
+}
+
+// Série quotidienne générique pour les 30 derniers jours (jours à 0 inclus, sinon le graphe
+// sauterait les jours sans activité au lieu de creuser jusqu'à zéro) -- `reducer` agrège les
+// lignes tombées ce jour-là (compte d'uniques pour le trafic, somme pour un revenu...).
+function buildDailySeries(now, days, rows, dateOf, reducer) {
+  const buckets = new Map();
+  for (let i = days - 1; i >= 0; i--) {
+    const key = startOfDay(new Date(now.getTime() - i * DAY_MS)).toISOString().slice(0, 10);
+    buckets.set(key, []);
+  }
+  for (const row of rows) {
+    const key = startOfDay(dateOf(row)).toISOString().slice(0, 10);
+    if (buckets.has(key)) buckets.get(key).push(row);
+  }
+  return Array.from(buckets.entries()).map(([date, rowsForDay]) => ({ date, value: reducer(rowsForDay) }));
 }
 
 // Chiffres réels du projet digyo (voir DigyoDashboard.jsx côté front) : revenu facturé,
@@ -103,18 +120,13 @@ router.get("/digyo", async (req, res) => {
     },
   ];
 
-  // Visiteurs uniques par jour sur les 30 derniers jours, jours à 0 inclus (sinon le graphe
-  // sauterait les jours sans visite au lieu de creuser jusqu'à zéro).
-  const dayBuckets = new Map();
-  for (let i = 29; i >= 0; i--) {
-    const key = startOfDay(new Date(now.getTime() - i * DAY_MS)).toISOString().slice(0, 10);
-    dayBuckets.set(key, new Set());
-  }
-  for (const view of pageViewsLast30) {
-    const key = startOfDay(view.createdAt).toISOString().slice(0, 10);
-    if (dayBuckets.has(key)) dayBuckets.get(key).add(view.visitorId);
-  }
-  const visits = Array.from(dayBuckets.entries()).map(([date, visitors]) => ({ date, visits: visitors.size }));
+  const trendChart = buildDailySeries(
+    now,
+    30,
+    pageViewsLast30,
+    (v) => v.createdAt,
+    (rows) => new Set(rows.map((r) => r.visitorId)).size
+  );
 
   const activity = [
     ...recentContacts.map((m) => ({
@@ -154,7 +166,89 @@ router.get("/digyo", async (req, res) => {
     .slice(0, 8)
     .map(({ id, text, type, date }) => ({ id, text, type, time: date.toISOString() }));
 
-  res.json({ stats, activity, visits });
+  res.json({ stats, activity, trend: trendChart, trendLabel: "Visiteurs uniques par jour", trendUnit: "visiteur" });
+});
+
+// Chiffres réels du projet sschool : établissements actifs, élèves inscrits, revenu encaissé (les
+// vrais versements enregistrés en console, voir Payment) et abonnements arrivant à échéance --
+// plus une courbe de revenu quotidien et un fil d'activité (nouveaux établissements, paiements).
+router.get("/sschool", async (req, res) => {
+  const now = new Date();
+  const start30 = new Date(now.getTime() - 30 * DAY_MS);
+  const start60 = new Date(now.getTime() - 60 * DAY_MS);
+  const in30Days = new Date(now.getTime() + 30 * DAY_MS);
+
+  const [
+    activeCount,
+    studentsAgg,
+    paymentsLast30,
+    paymentsPrev30,
+    renewalsCount,
+    recentEstablishments,
+    recentPayments,
+  ] = await Promise.all([
+    prisma.establishment.count({ where: { status: "actif" } }),
+    prisma.establishment.aggregate({ where: { status: "actif" }, _sum: { studentCount: true } }),
+    prisma.payment.findMany({ where: { date: { gte: start30 } } }),
+    prisma.payment.findMany({ where: { date: { gte: start60, lt: start30 } } }),
+    prisma.establishment.count({ where: { validityEnd: { gte: now, lte: in30Days } } }),
+    prisma.establishment.findMany({ orderBy: { createdAt: "desc" }, take: 5 }),
+    prisma.payment.findMany({ orderBy: { date: "desc" }, take: 5, include: { establishment: true } }),
+  ]);
+
+  const revenue30 = paymentsLast30.reduce((sum, p) => sum + p.montantVerse, 0);
+  const revenuePrev30 = paymentsPrev30.reduce((sum, p) => sum + p.montantVerse, 0);
+  const revenueDelta = pctDelta(revenue30, revenuePrev30);
+
+  const stats = [
+    { label: "Établissements actifs", value: String(activeCount), delta: null, trend: "flat" },
+    {
+      label: "Élèves inscrits",
+      value: (studentsAgg._sum.studentCount ?? 0).toLocaleString("fr-FR"),
+      delta: null,
+      trend: "flat",
+    },
+    {
+      label: "Revenu encaissé (30j)",
+      value: `${revenue30.toLocaleString("fr-FR")} F`,
+      delta: formatDelta(revenueDelta),
+      trend: trendFor(revenueDelta),
+    },
+    {
+      label: "Abonnements à renouveler (30j)",
+      value: String(renewalsCount),
+      delta: null,
+      trend: renewalsCount > 0 ? "up" : "flat",
+    },
+  ];
+
+  const trendChart = buildDailySeries(
+    now,
+    30,
+    paymentsLast30,
+    (p) => p.date,
+    (rows) => rows.reduce((sum, p) => sum + p.montantVerse, 0)
+  );
+
+  const activity = [
+    ...recentEstablishments.map((e) => ({
+      id: `establishment-${e.id}`,
+      text: `Nouvel établissement activé : ${e.name}`,
+      date: e.createdAt,
+      type: "establishment",
+    })),
+    ...recentPayments.map((p) => ({
+      id: `payment-${p.id}`,
+      text: `Paiement de ${p.montantVerse.toLocaleString("fr-FR")} F reçu -- ${p.establishment.name} (${PAYMENT_STATUS_TO_API[p.statut]})`,
+      date: p.date,
+      type: "payment",
+    })),
+  ]
+    .sort((a, b) => b.date - a.date)
+    .slice(0, 8)
+    .map(({ id, text, type, date }) => ({ id, text, type, time: date.toISOString() }));
+
+  res.json({ stats, activity, trend: trendChart, trendLabel: "Revenu encaissé par jour", trendUnit: "F" });
 });
 
 export default router;
