@@ -16,6 +16,7 @@ import diagnosticsRoutes from "./diagnostics.js";
 import supportConversationsRoutes from "./supportConversations.js";
 import quotesRoutes from "./quotes.js";
 import invoicesRoutes from "./invoices.js";
+import dashboardRoutes from "./dashboard.js";
 
 const router = Router();
 
@@ -38,6 +39,7 @@ router.use("/diagnostics", requireAuth, diagnosticsRoutes);
 router.use("/support-conversations", requireAuth, supportConversationsRoutes);
 router.use("/quotes", requireAuth, quotesRoutes);
 router.use("/invoices", requireAuth, invoicesRoutes);
+router.use("/dashboard", requireAuth, dashboardRoutes);
 router.use("/public", publicPortalRoutes);
 
 export default router;

@@ -534,3 +534,19 @@ model InvoiceItem {
   quantity    Int     @default(1)
   unitPrice   Int
 }
+
+// Une ligne par navigation sur digyo.pro (voir digyo-site/back/src/routes/analytics.js, envoyée
+// par le front à chaque changement de route -- App.jsx). `visitorId` réutilise l'identifiant
+// anonyme déjà posé en localStorage pour les likes de blog (voir BlogLike, lib/visitor.js) :
+// pas de nouveau tracking, juste un compteur de trafic pour le tableau de bord de la console
+// (routes/dashboard.js). Alimente le graphe de visites — aucune donnée avant la mise en place de
+// ce suivi, l'historique démarre au déploiement de cette fonctionnalité.
+model PageView {
+  id        Int      @id @default(autoincrement())
+  path      String
+  visitorId String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([visitorId])
+}

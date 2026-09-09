@@ -12,7 +12,7 @@ import {
   serializePayment,
 } from "../lib/serializers.js";
 import { STATUS_TO_API } from "../lib/mappers.js";
-import { publicMutationLimiter } from "../middleware/rateLimit.js";
+import { publicMutationLimiter, analyticsIngestLimiter } from "../middleware/rateLimit.js";
 import { MODULES, LIMITES } from "../lib/catalogue.js";
 import { activerOffre, initierAbonnement, verifierEtTraiter, enregistrerReferenceExterne } from "../lib/billing.js";
 import { jetonDepuisWebhook } from "../lib/paiement/index.js";
@@ -634,6 +634,17 @@ router.post("/paiement/webhook", async (req, res) => {
     console.error("Erreur webhook paiement :", err);
   }
   res.status(200).end();
+});
+
+// Trafic digyo.pro pour le tableau de bord (voir routes/dashboard.js) -- envoyé par
+// digyo-site/back/src/routes/analytics.js à chaque navigation. Best-effort côté digyo (il
+// n'attend pas la réponse), donc on répond vite et on n'échoue jamais bruyamment.
+router.post("/analytics/pageview", analyticsIngestLimiter, requirePortalKey, async (req, res) => {
+  const { visitorId, path } = req.body || {};
+  if (!visitorId || !path) return res.status(400).json({ error: "visitorId et path sont requis." });
+
+  await prisma.pageView.create({ data: { visitorId, path: String(path).slice(0, 191) } });
+  res.status(204).end();
 });
 
 export default router;
