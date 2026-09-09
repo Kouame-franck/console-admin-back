@@ -42,7 +42,7 @@ export const MODULES = [
 
 export const LIMITES = [
   { id: "studentLimit", name: "Étudiants" },
-  { id: "cursusLimit", name: "Cursus" },
+  { id: "cursusLimit", name: "Cycles" },
   { id: "teacherLimit", name: "Enseignants" },
   { id: "staffLimit", name: "Comptes personnel" },
   { id: "roleLimit", name: "Rôles créés" },
