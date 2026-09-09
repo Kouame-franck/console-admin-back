@@ -231,3 +231,61 @@ export function serializePerformanceConfig(c) {
     },
   };
 }
+
+function serializeLineItem(item) {
+  return {
+    id: item.id,
+    description: item.description,
+    quantity: item.quantity,
+    unitPrice: item.unitPrice,
+    total: item.quantity * item.unitPrice,
+  };
+}
+
+function sumItems(items) {
+  return items.reduce((sum, it) => sum + it.quantity * it.unitPrice, 0);
+}
+
+function serializeDocumentClient(d) {
+  return {
+    name: d.clientName,
+    company: d.clientCompany,
+    email: d.clientEmail,
+    phone: d.clientPhone,
+    address: d.clientAddress,
+  };
+}
+
+export function serializeQuote(q) {
+  return {
+    id: q.code,
+    object: q.object,
+    client: serializeDocumentClient(q),
+    validityDays: q.validityDays,
+    paymentTerms: q.paymentTerms,
+    notes: q.notes,
+    status: q.status,
+    issuedAt: q.issuedAt.toISOString(),
+    items: q.items.map(serializeLineItem),
+    total: sumItems(q.items),
+    invoiceId: q.invoice?.code ?? null,
+    createdAt: q.createdAt.toISOString(),
+  };
+}
+
+export function serializeInvoice(inv) {
+  return {
+    id: inv.code,
+    object: inv.object,
+    client: serializeDocumentClient(inv),
+    paymentTerms: inv.paymentTerms,
+    notes: inv.notes,
+    status: inv.status,
+    issuedAt: inv.issuedAt.toISOString(),
+    paidAt: inv.paidAt ? inv.paidAt.toISOString() : null,
+    items: inv.items.map(serializeLineItem),
+    total: sumItems(inv.items),
+    quoteId: inv.quote?.code ?? null,
+    createdAt: inv.createdAt.toISOString(),
+  };
+}

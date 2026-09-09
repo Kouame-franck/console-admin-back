@@ -14,6 +14,8 @@ import blogRoutes from "./blog.js";
 import contactMessagesRoutes from "./contactMessages.js";
 import diagnosticsRoutes from "./diagnostics.js";
 import supportConversationsRoutes from "./supportConversations.js";
+import quotesRoutes from "./quotes.js";
+import invoicesRoutes from "./invoices.js";
 
 const router = Router();
 
@@ -34,6 +36,8 @@ router.use("/blog", requireAuth, blogRoutes);
 router.use("/contact-messages", requireAuth, contactMessagesRoutes);
 router.use("/diagnostics", requireAuth, diagnosticsRoutes);
 router.use("/support-conversations", requireAuth, supportConversationsRoutes);
+router.use("/quotes", requireAuth, quotesRoutes);
+router.use("/invoices", requireAuth, invoicesRoutes);
 router.use("/public", publicPortalRoutes);
 
 export default router;

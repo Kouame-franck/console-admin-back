@@ -454,3 +454,83 @@ model ContactMessage {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
+
+enum QuoteStatus {
+  brouillon
+  envoye
+  accepte
+  refuse
+}
+
+enum InvoiceStatus {
+  emise
+  payee
+  annulee
+}
+
+// Devis/factures digyo (onglet "Devis/Facture" de la console, à côté du blog) -- client saisi
+// librement à chaque devis (pas de lien vers un établissement ou une demande de projet : les
+// clients devis sont souvent hors écosystème sschool, ex. Le Refuge du Lecteur). `code` suit la
+// même convention que Payment/Establishment (voir lib/codes.js > nextCode), préfixe "DEV".
+model Quote {
+  id            Int         @id @default(autoincrement())
+  code          String      @unique
+  clientName    String
+  clientCompany String?
+  clientEmail   String?
+  clientPhone   String?
+  clientAddress String?
+  object        String?
+  validityDays  Int         @default(30)
+  paymentTerms  String?     @db.Text
+  notes         String?     @db.Text
+  status        QuoteStatus @default(brouillon)
+  issuedAt      DateTime    @default(now())
+  items         QuoteItem[]
+  // Un devis converti (voir routes/quotes.js > POST /:code/convert) devient accepte et ne peut
+  // plus être édité ni supprimé -- la facture générée est la seule version qui compte désormais.
+  invoice       Invoice?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+model QuoteItem {
+  id          Int    @id @default(autoincrement())
+  quoteId     Int
+  quote       Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Int    @default(1)
+  unitPrice   Int
+}
+
+// Facture émise soit par conversion d'un devis accepté (quoteId renseigné), soit directement
+// (prestation ponctuelle, mensualité de maintenance...) -- voir routes/invoices.js.
+model Invoice {
+  id            Int           @id @default(autoincrement())
+  code          String        @unique
+  quoteId       Int?          @unique
+  quote         Quote?        @relation(fields: [quoteId], references: [id])
+  clientName    String
+  clientCompany String?
+  clientEmail   String?
+  clientPhone   String?
+  clientAddress String?
+  object        String?
+  paymentTerms  String?       @db.Text
+  notes         String?       @db.Text
+  status        InvoiceStatus @default(emise)
+  issuedAt      DateTime      @default(now())
+  paidAt        DateTime?
+  items         InvoiceItem[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model InvoiceItem {
+  id          Int     @id @default(autoincrement())
+  invoiceId   Int
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Int     @default(1)
+  unitPrice   Int
+}
