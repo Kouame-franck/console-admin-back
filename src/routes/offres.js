@@ -79,10 +79,23 @@ router.delete("/:slug", async (req, res) => {
   const existing = await prisma.offer.findUnique({ where: { slug: req.params.slug } });
   if (!existing) return res.status(404).json({ error: "Offre introuvable." });
 
-  await prisma.establishment.updateMany({ where: { offerId: existing.id }, data: { offerId: null } });
+  // Avant (audit 2026-09-10) : cette route détachait silencieusement tout établissement encore
+  // sur cette offre (offerId -> null) pour satisfaire la contrainte de clé étrangère avant de
+  // supprimer. Effet de bord non voulu : l'établissement restait 'actif' (status est un champ
+  // indépendant), sans formule ni plafonds connus — voir utils/abonnementStatus.js côté
+  // s-school, qui bloque maintenant l'accès dans ce cas précis plutôt que de le laisser ouvert
+  // sans contrôle. Mais la vraie correction est ici : ne JAMAIS détacher un établissement sans
+  // que quelqu'un l'ait explicitement réattribué à une autre offre.
+  const etablissementsRattaches = await prisma.establishment.count({ where: { offerId: existing.id } });
+  if (etablissementsRattaches > 0) {
+    return res.status(409).json({
+      error: `${etablissementsRattaches} établissement${etablissementsRattaches > 1 ? "s" : ""} ${etablissementsRattaches > 1 ? "sont" : "est"} actuellement sur cette offre. Réattribuez-le${etablissementsRattaches > 1 ? "s" : ""} à une autre offre avant de la supprimer.`,
+    });
+  }
+
   // PendingPayment.offerId référence aussi Offer (paiements de signup/renouvellement passés,
-  // même traités) — sans ce nettoyage, la contrainte de clé étrangère fait échouer la
-  // suppression dès qu'une offre a le moindre historique de paiement.
+  // même traités) — un enregistrement historique, pas un établissement actif à préserver : on
+  // le détache plutôt que de bloquer la suppression dessus.
   await prisma.pendingPayment.updateMany({ where: { offerId: existing.id }, data: { offerId: null } });
   await prisma.offer.delete({ where: { slug: req.params.slug } });
   res.status(204).end();
