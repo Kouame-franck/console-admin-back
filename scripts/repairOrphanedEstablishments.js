@@ -23,6 +23,14 @@ const prisma = new PrismaClient({ adapter });
 
 const APPLY = process.argv.includes("--apply");
 
+// Formules historiques qui n'existent plus dans le catalogue actuel — décidé au cas par cas
+// avec Franck le 2026-09-10 : "Essaie" était un ancien palier d'essai, retiré du catalogue
+// avant même la restructuration Starter/Standard/Pro/Premium, donc invisible depuis /offres.
+// Les établissements encore dessus sont rattachés à Starter.
+const RENOMMAGES_HISTORIQUES = {
+  Essaie: "Starter",
+};
+
 async function main() {
   const orphelins = await prisma.establishment.findMany({
     where: { offerId: null },
@@ -48,7 +56,8 @@ async function main() {
       continue;
     }
 
-    const candidats = offres.filter((o) => o.name === nomFormule);
+    const nomCible = RENOMMAGES_HISTORIQUES[nomFormule] ?? nomFormule;
+    const candidats = offres.filter((o) => o.name === nomCible);
     if (candidats.length === 0) {
       console.log(`- [${etab.code}] ${etab.name} : dernier paiement pour "${nomFormule}", mais aucune offre actuelle ne porte ce nom (renommée ?) — à traiter à la main.`);
       continue;
