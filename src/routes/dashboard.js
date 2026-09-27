@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma.js";
 import { PAYMENT_STATUS_TO_API } from "../lib/mappers.js";
+import { fetchSurveillancePaiements } from "../lib/sschoolSync.js";
 
 const router = Router();
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -249,6 +250,17 @@ router.get("/sschool", async (req, res) => {
     .map(({ id, text, type, date }) => ({ id, text, type, time: date.toISOString() }));
 
   res.json({ stats, activity, trend: trendChart, trendLabel: "Revenu encaissé par jour", trendUnit: "F" });
+});
+
+// Paiements en ligne des écoles (scolarité / inscriptions encaissées par chaque école via son
+// propre lien Money Fusion) : état lu en direct côté sschool. Route séparée de /sschool pour que
+// le tableau de bord s'affiche même si sschool ne répond pas.
+router.get("/sschool/paiements-en-ligne", async (req, res) => {
+  try {
+    res.json(await fetchSurveillancePaiements());
+  } catch (err) {
+    res.status(502).json({ message: err.message });
+  }
 });
 
 export default router;

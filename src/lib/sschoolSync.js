@@ -92,3 +92,18 @@ export async function crediterSmsEtablissement({ sschoolId, quantite, reference 
   }
   return data;
 }
+
+// État de la surveillance des paiements en ligne des écoles (Money Fusion) côté sschool : contrôle
+// des URL de retour/webhook, dernier rattrapage automatique, compteurs, paiements reçus à
+// régulariser, refus Money Fusion par école. Voir utils/paiementsEnLigne.js côté sschool.
+export async function fetchSurveillancePaiements() {
+  const url = `${process.env.SSCHOOL_SYNC_URL}/admin-sync/paiements/surveillance`;
+  const res = await fetch(url, {
+    headers: { "x-admin-sync-key": process.env.SSCHOOL_SYNC_API_KEY },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) {
+    throw new Error(`Surveillance des paiements sschool indisponible (${res.status}).`);
+  }
+  return res.json();
+}
